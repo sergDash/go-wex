@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>go + wex — скелет</title>
+    <!-- Все стили через переменные в :root; цветов в разметке нет. -->
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <!--
+        Шаблон wex. Движок читает его содержимое как виртуальное дерево
+        и вставляет отрисованный результат после самого <template>.
+        Идентификатор app — точка привязки для $('#app') в app.js.
+    -->
+    <template id="app">
+        <main class="panel">
+            <h1 class="panel__title">Скелет go + wex</h1>
+            <p class="panel__lead">
+                Сервер на Go отдаёт страницу и JSON, интерфейс на wex
+                отрисовывает состояние, полученное по HTTP.
+            </p>
+            <!--
+                Классы состояния зависят от полей стейта ok и checking:
+                зелёный — сервер ответил успешно, красный — запрос не удался.
+            -->
+            <p class="status" w-class="{ 'status--ok': ok, 'status--error': !checking && !ok }">
+                <span class="status__dot"></span>{{ status }}
+            </p>
+        </main>
+    </template>
+
+    <!-- Порядок важен: wex расширяет jQuery и использует window.$ -->
+    <script src="/vendor/jquery.min.js"></script>
+    <script src="/vendor/wex.min.js"></script>
+    <script src="/app.js"></script>
+</body>
+</html>
