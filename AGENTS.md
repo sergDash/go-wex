@@ -35,6 +35,7 @@ cd web-server && go test ./...
 | `web-interface/` | фронтенд: разметка, `app.js`, `style.less`, `vendor/` |
 | `doc/coding/` | правила кода |
 | `doc/game/` | механики конкретных игр |
+| `doc/schemas/` | формы данных: хранилище, настройки, обмен |
 | `.agents/rules/` | правила работы агента в этом проекте |
 | `.agents/memory/` | запомненная информация между сессиями |
 
@@ -65,4 +66,5 @@ cd web-server && go test ./...
 - `doc/coding/go/AGENTS.md` — раскладка Go-кода и формат API.
 - `doc/coding/wex/AGENTS.md` — как подключён wex и как читать книгу.
 - `doc/coding/css/AGENTS.md` — Less, вложенность, миксины.
+- `doc/schemas/AGENTS.md` — формы данных: хранилище, настройки, обмен.
 - `doc/game/AGENTS.md` — что кладут в описания игровых механик.
