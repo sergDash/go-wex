@@ -4,8 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>go + wex — скелет</title>
-    <!-- Все стили через переменные в :root; цветов в разметке нет. -->
-    <link rel="stylesheet" href="/style.css">
+    <!--
+        Исходник стилей — Less. less.js компилирует его в браузере,
+        поэтому сборщик для CSS не нужен. Скрипт идёт сразу после link:
+        он ищет все ссылки с rel="stylesheet/less".
+    -->
+    <link rel="stylesheet/less" type="text/css" href="/style.less">
+    <script src="/vendor/less.js"></script>
 </head>
 <body>
     <!--
@@ -15,17 +20,17 @@
     -->
     <template id="app">
         <main class="panel">
-            <h1 class="panel__title">Скелет go + wex</h1>
-            <p class="panel__lead">
+            <h1 class="title">Скелет go + wex</h1>
+            <p class="lead">
                 Сервер на Go отдаёт страницу и JSON, интерфейс на wex
                 отрисовывает состояние, полученное по HTTP.
             </p>
             <!--
                 Классы состояния зависят от полей стейта ok и checking:
-                зелёный — сервер ответил успешно, красный — запрос не удался.
+                ok — сервер ответил успешно, error — запрос не удался.
             -->
-            <p class="status" w-class="{ 'status--ok': ok, 'status--error': !checking && !ok }">
-                <span class="status__dot"></span>{{ status }}
+            <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
+                <span class="dot"></span>{{ status }}
             </p>
         </main>
     </template>

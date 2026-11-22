@@ -1,0 +1,99 @@
+/*
+    Стиль проекта.
+
+    Селектор состоит из одного слова, уникальность задаётся вложенностью:
+    .panel .title существует только внутри .panel и не задевает другие
+    блоки. Общие свойства собраны в миксины, чтобы одинаковые поверхности
+    и строки не расходились по файлу.
+
+    Цвета — переменные Less. В разметке и JS конкретных цветов нет.
+*/
+
+@bg: #101418;
+@surface: #171d24;
+@border: #263041;
+@text: #e6e9ee;
+@text-muted: #8a94a6;
+@accent: #6ea8fe;
+@ok: #4ade80;
+@error: #f87171;
+
+// Поверхность карточки: фон, рамка, скругление.
+.surface() {
+    border: 1px solid @border;
+    border-radius: 12px;
+    background: @surface;
+}
+
+// Строка с выровненными по центру элементами и промежутком.
+.row(@gap: 10px) {
+    display: flex;
+    align-items: center;
+    gap: @gap;
+}
+
+// Круглый индикатор; цвет передаётся при вызове.
+.indicator(@color) {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: @color;
+    flex: none;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: @bg;
+    color: @text;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.panel {
+    .surface();
+
+    width: 100%;
+    max-width: 560px;
+    padding: 32px;
+
+    .title {
+        margin: 0 0 12px;
+        font-size: 24px;
+        font-weight: 600;
+    }
+
+    .lead {
+        margin: 0 0 24px;
+        color: @text-muted;
+    }
+
+    .status {
+        .row();
+
+        margin: 0;
+        color: @text-muted;
+
+        .dot {
+            .indicator(@text-muted);
+        }
+
+        &.ok {
+            color: @ok;
+
+            .dot {
+                .indicator(@ok);
+            }
+        }
+
+        &.error {
+            color: @error;
+
+            .dot {
+                .indicator(@error);
+            }
+        }
+    }
+}
