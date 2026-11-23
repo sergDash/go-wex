@@ -1,0 +1,77 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// write кладёт временный файл настроек и возвращает путь.
+func write(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("запись настроек: %v", err)
+	}
+	return path
+}
+
+// TestLoad — корректный файл читается целиком.
+func TestLoadHTTPAPI(t *testing.T) {
+	path := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"}
+	}`)
+
+	c, err := LoadHTTPAPI(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Server.Addr != "127.0.0.1:9000" {
+		t.Fatalf("адрес: %q", c.Server.Addr)
+	}
+	if c.Interface.Dir != "interface" {
+		t.Fatalf("каталог: %q", c.Interface.Dir)
+	}
+}
+
+// TestUnknownKey — опечатка в имени настройки даёт ошибку, а не тишину.
+func TestUnknownKey(t *testing.T) {
+	path := write(t, `{
+		"server": {"addr": "127.0.0.1:9000", "adr": "опечатка"},
+		"interface": {"dir": "interface"}
+	}`)
+
+	_, err := LoadHTTPAPI(path)
+	if err == nil {
+		t.Fatal("жали ошибку неизвестного ключа")
+	}
+	if !strings.Contains(err.Error(), "adr") {
+		t.Fatalf("ошибка не называет ключ: %v", err)
+	}
+}
+
+// TestEmptyAddr — пустой адрес не допускается.
+func TestEmptyAddr(t *testing.T) {
+	path := write(t, `{
+		"server": {"addr": ""},
+		"interface": {"dir": "interface"}
+	}`)
+
+	_, err := LoadHTTPAPI(path)
+	if err == nil {
+		t.Fatal("жали ошибку пустого адреса")
+	}
+	if !strings.Contains(err.Error(), "server.addr") {
+		t.Fatalf("ошибка не называет поле: %v", err)
+	}
+}
+
+// TestShippedConfig — файл из поставки читается: пример не расходится
+// с загрузчиком.
+func TestShippedConfig(t *testing.T) {
+	if _, err := LoadHTTPAPI(filepath.Join("..", "..", "config", "httpapi.json")); err != nil {
+		t.Fatalf("config/httpapi.json: %v", err)
+	}
+}
