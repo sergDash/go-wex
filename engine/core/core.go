@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"go-wex/engine/jobs"
+	"go-wex/engine/service"
 )
 
 // Handler — обработчик запроса: возвращает данные для общего конверта или
@@ -34,4 +35,5 @@ type Module interface {
 type Registry interface {
 	HTTP(method, path string, h Handler)
 	Job(kind string, spec jobs.Spec) error
+	Service(s service.Service)
 }

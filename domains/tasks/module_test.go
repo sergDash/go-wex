@@ -12,6 +12,7 @@ import (
 	"go-wex/engine/clock"
 	"go-wex/engine/core"
 	"go-wex/engine/jobs"
+	"go-wex/engine/service"
 )
 
 // testRegistry — реестр для проверки объявлений модуля: запоминает маршруты
@@ -36,6 +37,8 @@ func (r *testRegistry) Job(kind string, spec jobs.Spec) error {
 	r.specs[jobs.Kind(kind)] = spec
 	return nil
 }
+
+func (r *testRegistry) Service(service.Service) {}
 
 // newDispatcher собирает разборщик с тем же правилом вида, что объявляет
 // модуль, но без запуска службы: проверки вызывают Step напрямую.

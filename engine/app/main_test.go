@@ -16,11 +16,18 @@ import (
 	"go-wex/engine/schedule"
 )
 
+// fakeService — служба для проверки сбора: ничего не делает.
+type fakeService struct{}
+
+func (fakeService) Name() string                { return "fake" }
+func (fakeService) Start(context.Context) error { return nil }
+func (fakeService) Stop(context.Context) error  { return nil }
+
 // TestRegistryDelegates — реестр сборки отдаёт маршруты HTTP-службе,
-// а виды работ — реестру работ, включая отказ на повторный вид.
+// виды работ — реестру работ, службы — общему списку.
 func TestRegistryDelegates(t *testing.T) {
 	api := httpapi.New("127.0.0.1:0", fstest.MapFS{})
-	reg := registry{api: api, jobs: jobs.NewRegistry()}
+	reg := &registry{api: api, jobs: jobs.NewRegistry()}
 
 	reg.HTTP("GET", "/api/check", func(*http.Request) (any, error) { return "ok", nil })
 	rec := httptest.NewRecorder()
@@ -35,6 +42,11 @@ func TestRegistryDelegates(t *testing.T) {
 	}
 	if err := reg.Job("check", spec); err == nil {
 		t.Fatal("повторный вид работы принят")
+	}
+
+	reg.Service(fakeService{})
+	if len(reg.services) != 1 || reg.services[0].Name() != "fake" {
+		t.Fatalf("службы: %+v", reg.services)
 	}
 }
 

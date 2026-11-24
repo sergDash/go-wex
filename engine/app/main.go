@@ -98,8 +98,8 @@ func main() {
 		return allowedNow(sched, meter, now)
 	})
 
-	// registry отдаёт модулю обе возможности: маршруты и работы.
-	reg := registry{api: srv, jobs: jobReg}
+	// registry отдаёт модулю три возможности: маршруты, работы и службы.
+	reg := &registry{api: srv, jobs: jobReg}
 
 	// Список модулей — единственное место, где приложение знает о них.
 	modules := []core.Module{
@@ -113,13 +113,15 @@ func main() {
 		log.Printf("модуль: %s", m.Name())
 	}
 
-	// Журнал открывается первым, затем разборщик, затем HTTP. При остановке
-	// порядок обратный: HTTP перестаёт принимать запросы, разборщик
-	// доигрывает срок, журнал закрывает файл последним.
-	services := []service.Service{disp, srv}
+	// Журнал открывается первым, затем службы модулей, разборщик и HTTP.
+	// При остановке порядок обратный: HTTP перестаёт принимать запросы,
+	// разборщик доигрывает срок, службы модулей и журнал закрываются после.
+	services := make([]service.Service, 0, 2+len(reg.services))
 	if journalSvc != nil {
-		services = append([]service.Service{journalSvc}, services...)
+		services = append(services, journalSvc)
 	}
+	services = append(services, reg.services...)
+	services = append(services, disp, srv)
 	group := service.New(services...)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -164,18 +166,23 @@ func checkIndex(dir string) error {
 }
 
 // registry собирает возможности модуля: маршруты уходят HTTP-службе,
-// виды работ — реестру работ. Сам модуль знает только форму из core.
+// виды работ — реестру работ, службы — в общий список запуска.
 type registry struct {
-	api  *httpapi.Server
-	jobs *jobs.Registry
+	api      *httpapi.Server
+	jobs     *jobs.Registry
+	services []service.Service
 }
 
-func (r registry) HTTP(method, path string, h core.Handler) {
+func (r *registry) HTTP(method, path string, h core.Handler) {
 	r.api.HTTP(method, path, h)
 }
 
-func (r registry) Job(kind string, spec jobs.Spec) error {
+func (r *registry) Job(kind string, spec jobs.Spec) error {
 	return r.jobs.Add(jobs.Kind(kind), spec)
+}
+
+func (r *registry) Service(s service.Service) {
+	r.services = append(r.services, s)
 }
 
 // scheduleRules переводит настройки в пороги расписания. Без правил
