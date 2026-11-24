@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-3.schema.json",
+  "$id": "https://go-wex.local/httpapi-4.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
@@ -66,6 +66,29 @@
               }
             }
           }
+        }
+      }
+    },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "maxSize", "keep"],
+      "description": "журнал работы; без раздела журнал отключён",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "файл журнала относительно каталога запуска"
+        },
+        "maxSize": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "предел файла в байтах до ротации"
+        },
+        "keep": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "число старых копий журнала"
         }
       }
     }

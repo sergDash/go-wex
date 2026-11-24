@@ -13,5 +13,10 @@
       {"after": "0s", "class": "interactive"},
       {"after": "10s", "class": "background"}
     ]
+  },
+  "journal": {
+    "path": "data/journal.log",
+    "maxSize": 1048576,
+    "keep": 5
   }
 }

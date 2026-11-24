@@ -31,9 +31,9 @@ go test ./...
 | Путь | Назначение |
 |---|---|
 | `bin/` | собранные бинарники, в git не попадают |
-| `engine/` | движок: `app/`, `config/`, `core/`, `service/`, `jobs/`, `store/`, `clock/`, `schedule/`, `activity/`, `httpapi/` |
+| `engine/` | движок: `app/`, `config/`, `core/`, `service/`, `jobs/`, `store/`, `clock/`, `schedule/`, `activity/`, `journal/`, `httpapi/` |
 | `engine/app/` | точка сборки: настройки, список модулей, запуск |
-| `config/` | настройки приложения: адрес сервера, каталог интерфейса, файл хранилища |
+| `config/` | настройки приложения: адрес, интерфейс, хранилище, пороги, журнал |
 | `domains/` | модули предметной области |
 | `interface/` | интерфейс: разметка, `app.js`, `style.less`, `vendor/` |
 | `schemas/` | машинно-проверяемые схемы |

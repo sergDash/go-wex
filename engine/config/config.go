@@ -1,8 +1,8 @@
 // Package config — настройки приложения из файлов config/<предмет>.json.
 // Здесь настройки HTTP-службы (адрес и каталог интерфейса), путь к файлу
-// хранилища и пороги простоя. Проверка идёт при загрузке: неизвестный ключ
-// и пустое обязательное значение считаются ошибкой, чтобы приложение не
-// работало с половиной настроек.
+// хранилища, пороги простоя и журнал работы. Проверка идёт при загрузке:
+// неизвестный ключ и пустое обязательное значение считаются ошибкой, чтобы
+// приложение не работало с половиной настроек.
 package config
 
 import (
@@ -26,6 +26,7 @@ type HTTPAPI struct {
 	Interface Interface `json:"interface"`
 	Store     Store     `json:"store"`
 	Schedule  Schedule  `json:"schedule"`
+	Journal   *Journal  `json:"journal"`
 }
 
 // Server — настройки адреса HTTP-службы.
@@ -53,6 +54,14 @@ type Schedule struct {
 type ScheduleRule struct {
 	After string `json:"after"`
 	Class string `json:"class"`
+}
+
+// Journal — настройки журнала работы. Отсутствие раздела отключает журнал:
+// движок пишет только в обычный журнал процесса.
+type Journal struct {
+	Path    string `json:"path"`
+	MaxSize int64  `json:"maxSize"`
+	Keep    int    `json:"keep"`
 }
 
 // LoadHTTPAPI читает настройки HTTP-службы по пути path. Неизвестные ключи
@@ -95,6 +104,17 @@ func (c HTTPAPI) validate() error {
 		}
 		if !jobs.Class(r.Class).Valid() {
 			return fmt.Errorf("schedule.rules[%d].class: неизвестный класс %q", i, r.Class)
+		}
+	}
+	if c.Journal != nil {
+		if strings.TrimSpace(c.Journal.Path) == "" {
+			return errors.New("journal.path обязателен")
+		}
+		if c.Journal.MaxSize <= 0 {
+			return errors.New("journal.maxSize должен быть больше нуля")
+		}
+		if c.Journal.Keep <= 0 {
+			return errors.New("journal.keep должен быть больше нуля")
 		}
 	}
 	return nil

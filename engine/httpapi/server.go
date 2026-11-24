@@ -10,8 +10,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime/debug"
 
 	"go-wex/engine/core"
+	"go-wex/engine/journal"
 )
 
 // Activity — учёт запросов: Begin отмечает начало и возвращает завершение.
@@ -25,6 +27,7 @@ type Server struct {
 	addr     string
 	mux      *http.ServeMux
 	activity Activity
+	journal  journal.Writer
 
 	httpSrv *http.Server
 	ln      net.Listener
@@ -50,6 +53,21 @@ func (s *Server) Name() string { return "http" }
 // должен видеть запросы с первого соединения.
 func (s *Server) SetActivity(a Activity) {
 	s.activity = a
+}
+
+// SetJournal подключает журнал работы: в него пишутся паники обработчиков.
+func (s *Server) SetJournal(j journal.Writer) {
+	s.journal = j
+}
+
+// writeJournal пишет событие и не мешает ответу, если журнал недоступен.
+func (s *Server) writeJournal(kind string, fields map[string]any) {
+	if s.journal == nil {
+		return
+	}
+	if err := s.journal.Write("http", kind, fields); err != nil {
+		log.Printf("журнал: %v", err)
+	}
 }
 
 // withActivity оборачивает обработчик учётом запросов.
@@ -105,6 +123,20 @@ func (s *Server) Addr() string {
 // кладёт их в конверт и выбирает код ответа.
 func (s *Server) HTTP(method, path string, h core.Handler) {
 	s.mux.HandleFunc(method+" "+path, func(w http.ResponseWriter, r *http.Request) {
+		// Паника не покидает границу обработчика: клиент получает конверт
+		// с 500, паника со стеком уходит в журнал, служба продолжает работу.
+		defer func() {
+			if v := recover(); v != nil {
+				writeError(w, http.StatusInternalServerError, "внутренняя ошибка")
+				s.writeJournal("panic", map[string]any{
+					"method": r.Method,
+					"path":   r.URL.Path,
+					"panic":  fmt.Sprint(v),
+					"stack":  string(debug.Stack()),
+				})
+			}
+		}()
+
 		value, err := h(r)
 		if err != nil {
 			writeError(w, errorStatus(err), err.Error())

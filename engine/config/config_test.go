@@ -139,3 +139,41 @@ func TestScheduleRules(t *testing.T) {
 		t.Fatalf("неизвестный класс: %v", err)
 	}
 }
+
+// TestJournalSettings — журнал читается, пустой путь и нулевые пределы
+// отвергаются.
+func TestJournalSettings(t *testing.T) {
+	good := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"},
+		"journal": {"path": "data/journal.log", "maxSize": 1024, "keep": 3}
+	}`)
+	c, err := LoadHTTPAPI(good)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Journal == nil || c.Journal.Path != "data/journal.log" || c.Journal.MaxSize != 1024 || c.Journal.Keep != 3 {
+		t.Fatalf("журнал: %+v", c.Journal)
+	}
+
+	badPath := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"},
+		"journal": {"path": "", "maxSize": 1024, "keep": 3}
+	}`)
+	if _, err := LoadHTTPAPI(badPath); err == nil || !strings.Contains(err.Error(), "journal.path") {
+		t.Fatalf("пустой путь: %v", err)
+	}
+
+	badSize := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"},
+		"journal": {"path": "data/journal.log", "maxSize": 0, "keep": 3}
+	}`)
+	if _, err := LoadHTTPAPI(badSize); err == nil || !strings.Contains(err.Error(), "journal.maxSize") {
+		t.Fatalf("нулевой размер: %v", err)
+	}
+}

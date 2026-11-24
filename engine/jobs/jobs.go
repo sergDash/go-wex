@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
 
 	"go-wex/engine/clock"
+	"go-wex/engine/journal"
 	"go-wex/engine/store"
 )
 
@@ -345,11 +347,12 @@ func maxSeq(seq int, items map[string]*item) int {
 // Dispatcher — разборщик работ: забирает по одной, вызывает обработчик и
 // переводит статус. Шаг отделён от цикла, чтобы тесты не спали.
 type Dispatcher struct {
-	queue Queue
-	reg   *Registry
-	clock clock.Clock
-	nudge chan struct{}
-	log   *log.Logger
+	queue   Queue
+	reg     *Registry
+	clock   clock.Clock
+	nudge   chan struct{}
+	log     *log.Logger
+	journal journal.Writer
 
 	mu      sync.Mutex
 	paused  bool
@@ -362,11 +365,12 @@ type Dispatcher struct {
 // NewDispatcher собирает разборщик.
 func NewDispatcher(q Queue, r *Registry) *Dispatcher {
 	return &Dispatcher{
-		queue: q,
-		reg:   r,
-		clock: clock.Real{},
-		nudge: make(chan struct{}, 1),
-		log:   log.Default(),
+		queue:   q,
+		reg:     r,
+		clock:   clock.Real{},
+		nudge:   make(chan struct{}, 1),
+		log:     log.Default(),
+		journal: journal.Discard{},
 		allowed: func(time.Time) []Class {
 			return []Class{ClassInteractive, ClassBackground}
 		},
@@ -378,6 +382,12 @@ func (d *Dispatcher) SetClock(c clock.Clock) {
 	if c != nil {
 		d.clock = c
 	}
+}
+
+// SetJournal подключает журнал работы: в него пишутся выполнения, повторы,
+// отказы и паники.
+func (d *Dispatcher) SetJournal(j journal.Writer) {
+	d.journal = j
 }
 
 // Name — имя службы для группы.
@@ -554,12 +564,45 @@ func (d *Dispatcher) Step(ctx context.Context) (bool, error) {
 	}
 
 	if err := d.run(ctx, spec.Handler, job); err != nil {
+		fields := jobFields(job)
+		fields["error"] = err.Error()
+		fields["took_ms"] = d.clock.Now().Sub(now).Milliseconds()
+
 		if job.Attempts >= attempts(spec) {
+			d.writeJournal("fail", fields)
 			return true, errors.Join(err, d.queue.Fail(ctx, job.ID))
 		}
-		return true, errors.Join(err, d.queue.Retry(ctx, job.ID, now.Add(backoff(spec))))
+
+		delay := backoff(spec)
+		fields["backoff_ms"] = delay.Milliseconds()
+		d.writeJournal("retry", fields)
+		return true, errors.Join(err, d.queue.Retry(ctx, job.ID, now.Add(delay)))
 	}
+
+	fields := jobFields(job)
+	fields["took_ms"] = d.clock.Now().Sub(now).Milliseconds()
+	d.writeJournal("done", fields)
 	return true, d.queue.Done(ctx, job.ID)
+}
+
+// jobFields — общие поля события работы.
+func jobFields(job Job) map[string]any {
+	return map[string]any{
+		"id":       job.ID,
+		"kind":     string(job.Kind),
+		"class":    string(job.Class),
+		"attempts": job.Attempts,
+	}
+}
+
+// writeJournal пишет событие и не мешает разбору, если журнал недоступен.
+func (d *Dispatcher) writeJournal(kind string, fields map[string]any) {
+	if d.journal == nil {
+		return
+	}
+	if err := d.journal.Write("jobs", kind, fields); err != nil {
+		d.log.Printf("журнал: %v", err)
+	}
 }
 
 // Run разбирает очередь до отмены контекста: сначала всё доступное, затем
@@ -592,6 +635,13 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 func (d *Dispatcher) run(ctx context.Context, h Handler, job Job) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			d.writeJournal("panic", map[string]any{
+				"id":    job.ID,
+				"kind":  string(job.Kind),
+				"class": string(job.Class),
+				"panic": fmt.Sprint(r),
+				"stack": string(debug.Stack()),
+			})
 			err = fmt.Errorf("jobs: паника в работе %q: %v", job.Kind, r)
 		}
 	}()

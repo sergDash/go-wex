@@ -92,6 +92,60 @@ func TestActivityCounts(t *testing.T) {
 	}
 }
 
+// journalFake — журнал для проверки: запоминает записи.
+type journalFake struct {
+	sources []string
+	kinds   []string
+	fields  []map[string]any
+}
+
+func (j *journalFake) Write(source, kind string, fields map[string]any) error {
+	j.sources = append(j.sources, source)
+	j.kinds = append(j.kinds, kind)
+	j.fields = append(j.fields, fields)
+	return nil
+}
+
+// TestPanicRecovered — паника обработчика даёт 500 в конверте, попадает
+// в журнал, а служба продолжает обслуживать запросы.
+func TestPanicRecovered(t *testing.T) {
+	s := New("127.0.0.1:0", fstest.MapFS{})
+	j := &journalFake{}
+	s.SetJournal(j)
+	s.HTTP("GET", "/api/panic", func(*http.Request) (any, error) {
+		panic("сломано")
+	})
+	s.HTTP("GET", "/api/ok", func(*http.Request) (any, error) { return "ok", nil })
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/panic", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("паника: код %d", rec.Code)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("разбор ответа: %v", err)
+	}
+	if body.Error == "" {
+		t.Fatalf("ответ без ошибки: %s", rec.Body.String())
+	}
+
+	if len(j.kinds) != 1 || j.kinds[0] != "panic" || j.sources[0] != "http" {
+		t.Fatalf("журнал: %+v", j)
+	}
+	if j.fields[0]["path"] != "/api/panic" {
+		t.Fatalf("поле пути: %+v", j.fields[0])
+	}
+
+	okRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(okRec, httptest.NewRequest(http.MethodGet, "/api/ok", nil))
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("после паники: код %d", okRec.Code)
+	}
+}
+
 // TestStartStop — служба занимает свободный порт, отвечает и освобождает
 // порт при остановке.
 func TestStartStop(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"go-wex/engine/core"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
+	"go-wex/engine/journal"
 	"go-wex/engine/schedule"
 	"go-wex/engine/service"
 	"go-wex/engine/store"
@@ -52,8 +53,18 @@ func main() {
 	clk := clock.NewReal()
 	meter := activity.New(clk)
 
+	// Журнал работы включается настройкой. Без неё используется пустой
+	// приёмник и отдельной службы не появляется.
+	var jw journal.Writer = journal.Discard{}
+	var journalSvc *journal.Journal
+	if cfg.Journal != nil {
+		journalSvc = journal.New(cfg.Journal.Path, cfg.Journal.MaxSize, cfg.Journal.Keep, clk)
+		jw = journalSvc
+	}
+
 	srv := httpapi.New(cfg.Server.Addr, os.DirFS(dir))
 	srv.SetActivity(meter)
+	srv.SetJournal(jw)
 
 	// Хранилище открывается до служб: ошибка версии или повреждённого файла
 	// должна быть видна сразу, а не при первом запросе.
@@ -71,6 +82,7 @@ func main() {
 	}
 	disp := jobs.NewDispatcher(queue, jobReg)
 	disp.SetClock(clk)
+	disp.SetJournal(jw)
 
 	// Расписание отвечает, какие классы допустимы при текущем простое;
 	// пока идёт запрос, фон из набора убирается.
@@ -101,9 +113,14 @@ func main() {
 		log.Printf("модуль: %s", m.Name())
 	}
 
-	// Разборщик стартует раньше HTTP, поэтому при остановке HTTP закрывается
-	// первым: новые запросы уже не ставят работу в остановленную очередь.
-	group := service.New(disp, srv)
+	// Журнал открывается первым, затем разборщик, затем HTTP. При остановке
+	// порядок обратный: HTTP перестаёт принимать запросы, разборщик
+	// доигрывает срок, журнал закрывает файл последним.
+	services := []service.Service{disp, srv}
+	if journalSvc != nil {
+		services = append([]service.Service{journalSvc}, services...)
+	}
+	group := service.New(services...)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

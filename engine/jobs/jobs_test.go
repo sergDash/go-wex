@@ -549,3 +549,82 @@ func TestStoreQueueStatusPersists(t *testing.T) {
 		t.Fatalf("статус после перезапуска: %q", status)
 	}
 }
+
+// journalFake — журнал для проверки: запоминает виды и поля.
+type journalFake struct {
+	kinds  []string
+	fields []map[string]any
+}
+
+func (j *journalFake) Write(_ string, kind string, fields map[string]any) error {
+	j.kinds = append(j.kinds, kind)
+	j.fields = append(j.fields, fields)
+	return nil
+}
+
+// TestJournalRecords — выполнение и отказ попадают в журнал с номером работы.
+func TestJournalRecords(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("ok", Spec{Handler: func(context.Context, Job) error { return nil }}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := reg.Add("bad", Spec{
+		Handler:     func(context.Context, Job) error { return errors.New("нет связи") },
+		MaxAttempts: 1,
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := NewDispatcher(NewMemoryQueue(), reg)
+	j := &journalFake{}
+	d.SetJournal(j)
+	ctx := context.Background()
+
+	if _, err := d.Enqueue(ctx, "ok", nil, ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := d.Enqueue(ctx, "bad", nil, ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := d.Step(ctx); err != nil {
+		t.Fatalf("Step ok: %v", err)
+	}
+	if _, err := d.Step(ctx); err == nil {
+		t.Fatal("Step bad: ждали ошибку")
+	}
+
+	if len(j.kinds) != 2 || j.kinds[0] != "done" || j.kinds[1] != "fail" {
+		t.Fatalf("виды: %v", j.kinds)
+	}
+	if j.fields[0]["id"] == "" || j.fields[1]["error"] == "" {
+		t.Fatalf("поля: %+v", j.fields)
+	}
+}
+
+// TestJournalPanic — паника пишется в журнал отдельным событием.
+func TestJournalPanic(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("panic", Spec{
+		Handler:     func(context.Context, Job) error { panic("сломано") },
+		MaxAttempts: 1,
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := NewDispatcher(NewMemoryQueue(), reg)
+	j := &journalFake{}
+	d.SetJournal(j)
+	ctx := context.Background()
+
+	if _, err := d.Enqueue(ctx, "panic", nil, ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := d.Step(ctx); err == nil {
+		t.Fatal("Step: ждали ошибку паники")
+	}
+
+	if len(j.kinds) != 2 || j.kinds[0] != "panic" || j.kinds[1] != "fail" {
+		t.Fatalf("виды: %v", j.kinds)
+	}
+	if j.fields[0]["stack"] == "" {
+		t.Fatalf("нет стека: %+v", j.fields[0])
+	}
+}
