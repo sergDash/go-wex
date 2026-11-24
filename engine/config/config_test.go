@@ -98,3 +98,44 @@ func TestEmptyStorePath(t *testing.T) {
 		t.Fatalf("ошибка не называет поле: %v", err)
 	}
 }
+
+// TestScheduleRules — корректные пороги читаются, неверный срок и
+// неизвестный класс отвергаются.
+func TestScheduleRules(t *testing.T) {
+	good := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"},
+		"schedule": {"rules": [
+			{"after": "5m", "class": "background"},
+			{"after": "0s", "class": "interactive"}
+		]}
+	}`)
+	c, err := LoadHTTPAPI(good)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.Schedule.Rules) != 2 {
+		t.Fatalf("порогов: %d", len(c.Schedule.Rules))
+	}
+
+	badTime := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"},
+		"schedule": {"rules": [{"after": "пять минут", "class": "background"}]}
+	}`)
+	if _, err := LoadHTTPAPI(badTime); err == nil || !strings.Contains(err.Error(), "schedule.rules[0].after") {
+		t.Fatalf("неверный срок: %v", err)
+	}
+
+	badClass := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"},
+		"schedule": {"rules": [{"after": "5m", "class": "urgent"}]}
+	}`)
+	if _, err := LoadHTTPAPI(badClass); err == nil || !strings.Contains(err.Error(), "schedule.rules[0].class") {
+		t.Fatalf("неизвестный класс: %v", err)
+	}
+}

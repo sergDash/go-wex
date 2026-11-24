@@ -63,6 +63,35 @@ func TestRegisterAndEncode(t *testing.T) {
 	}
 }
 
+// activityFake — учёт запросов для проверки: считает начало и завершение.
+type activityFake struct {
+	begins int
+	ends   int
+}
+
+func (a *activityFake) Begin() func() {
+	a.begins++
+	return func() { a.ends++ }
+}
+
+// TestActivityCounts — каждый запрос проходит через учёт, включая
+// обработчик маршрута.
+func TestActivityCounts(t *testing.T) {
+	s := New("127.0.0.1:0", fstest.MapFS{})
+	a := &activityFake{}
+	s.SetActivity(a)
+	s.HTTP("GET", "/api/check", func(*http.Request) (any, error) { return "ok", nil })
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/check", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код: %d", rec.Code)
+	}
+	if a.begins != 1 || a.ends != 1 {
+		t.Fatalf("учёт: начал=%d завершил=%d", a.begins, a.ends)
+	}
+}
+
 // TestStartStop — служба занимает свободный порт, отвечает и освобождает
 // порт при остановке.
 func TestStartStop(t *testing.T) {

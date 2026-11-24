@@ -7,5 +7,11 @@
   },
   "store": {
     "path": "data/store.json"
+  },
+  "schedule": {
+    "rules": [
+      {"after": "0s", "class": "interactive"},
+      {"after": "10s", "class": "background"}
+    ]
   }
 }

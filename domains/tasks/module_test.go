@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"go-wex/engine/clock"
 	"go-wex/engine/core"
 	"go-wex/engine/jobs"
 )
@@ -81,7 +82,7 @@ func TestRegister(t *testing.T) {
 	if !ok || spec.Handler == nil {
 		t.Fatalf("вид работы %q: spec=%+v ok=%v", kind, spec, ok)
 	}
-	if spec.Class != jobs.ClassBackground {
+	if spec.Class != jobs.ClassInteractive {
 		t.Fatalf("класс вида: %q", spec.Class)
 	}
 }
@@ -102,7 +103,7 @@ func TestEnqueueAndRun(t *testing.T) {
 	if !ok || queued.Status != jobs.StatusQueued || queued.ID == "" {
 		t.Fatalf("ответ постановки: %+v", value)
 	}
-	if queued.Class != jobs.ClassBackground {
+	if queued.Class != jobs.ClassInteractive {
 		t.Fatalf("класс по умолчанию: %q", queued.Class)
 	}
 
@@ -123,10 +124,10 @@ func TestEnqueueAndRun(t *testing.T) {
 // TestRetry — нарочитая ошибка возвращает работу в очередь, следующая
 // попытка выполняется после задержки.
 func TestRetry(t *testing.T) {
-	now := time.Unix(1000, 0)
+	clk := clock.NewManual(time.Unix(1000, 0))
 	m := module{}
 	m.disp = newDispatcher(t, m)
-	m.disp.SetNow(func() time.Time { return now })
+	m.disp.SetClock(clk)
 	ctx := context.Background()
 
 	value, err := m.enqueue(httptest.NewRequest(http.MethodPost, "/api/tasks",
@@ -143,7 +144,7 @@ func TestRetry(t *testing.T) {
 		t.Fatalf("после ошибки статус %q", status)
 	}
 
-	now = now.Add(time.Second)
+	clk.Advance(time.Second)
 	if handled, err := m.disp.Step(ctx); !handled || err != nil {
 		t.Fatalf("вторая попытка: handled=%v err=%v", handled, err)
 	}

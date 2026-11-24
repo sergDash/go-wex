@@ -12,13 +12,17 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"go-wex/domains/health"
 	"go-wex/domains/tasks"
+	"go-wex/engine/activity"
+	"go-wex/engine/clock"
 	"go-wex/engine/config"
 	"go-wex/engine/core"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
+	"go-wex/engine/schedule"
 	"go-wex/engine/service"
 	"go-wex/engine/store"
 )
@@ -43,7 +47,13 @@ func main() {
 	}
 	log.Printf("интерфейс: %s", dir)
 
+	// Часы и учёт запросов общие: расписание считает простой по последней
+	// активности, а занятость запросами убирает фон.
+	clk := clock.NewReal()
+	meter := activity.New(clk)
+
 	srv := httpapi.New(cfg.Server.Addr, os.DirFS(dir))
+	srv.SetActivity(meter)
 
 	// Хранилище открывается до служб: ошибка версии или повреждённого файла
 	// должна быть видна сразу, а не при первом запросе.
@@ -60,6 +70,21 @@ func main() {
 		log.Fatalf("очередь: %v", err)
 	}
 	disp := jobs.NewDispatcher(queue, jobReg)
+	disp.SetClock(clk)
+
+	// Расписание отвечает, какие классы допустимы при текущем простое;
+	// пока идёт запрос, фон из набора убирается.
+	rules, err := scheduleRules(cfg.Schedule.Rules)
+	if err != nil {
+		log.Fatalf("расписание: %v", err)
+	}
+	sched, err := schedule.New(rules)
+	if err != nil {
+		log.Fatalf("расписание: %v", err)
+	}
+	disp.SetAllowedFunc(func(now time.Time) []jobs.Class {
+		return allowedNow(sched, meter, now)
+	})
 
 	// registry отдаёт модулю обе возможности: маршруты и работы.
 	reg := registry{api: srv, jobs: jobReg}
@@ -134,4 +159,42 @@ func (r registry) HTTP(method, path string, h core.Handler) {
 
 func (r registry) Job(kind string, spec jobs.Spec) error {
 	return r.jobs.Add(jobs.Kind(kind), spec)
+}
+
+// scheduleRules переводит настройки в пороги расписания. Без правил
+// разрешены оба класса: расписание не ограничивает работу.
+func scheduleRules(rules []config.ScheduleRule) ([]schedule.Rule, error) {
+	if len(rules) == 0 {
+		return []schedule.Rule{
+			{Idle: 0, Class: jobs.ClassInteractive},
+			{Idle: 0, Class: jobs.ClassBackground},
+		}, nil
+	}
+
+	out := make([]schedule.Rule, 0, len(rules))
+	for i, r := range rules {
+		idle, err := time.ParseDuration(r.After)
+		if err != nil {
+			return nil, fmt.Errorf("порог %d: %w", i, err)
+		}
+		out = append(out, schedule.Rule{Idle: idle, Class: jobs.Class(r.Class)})
+	}
+	return out, nil
+}
+
+// allowedNow — классы, которые разборщик может взять сейчас: расписание
+// по простою, кроме фона, пока есть активный запрос.
+func allowedNow(s *schedule.Schedule, m *activity.Meter, now time.Time) []jobs.Class {
+	classes := s.Allowed(m.LastActive(), now)
+	if !m.Busy() {
+		return classes
+	}
+
+	out := make([]jobs.Class, 0, len(classes))
+	for _, c := range classes {
+		if c != jobs.ClassBackground {
+			out = append(out, c)
+		}
+	}
+	return out
 }

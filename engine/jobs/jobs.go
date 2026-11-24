@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"go-wex/engine/clock"
 	"go-wex/engine/store"
 )
 
@@ -67,6 +68,10 @@ type Spec struct {
 	MaxAttempts int
 	Backoff     time.Duration
 }
+
+// AllowedFunc сообщает, какие классы разрешены в момент now. Пустой набор
+// останавливает захват: это пауза по расписанию.
+type AllowedFunc func(now time.Time) []Class
 
 // Registry — виды работ, известные приложению.
 type Registry struct {
@@ -342,13 +347,13 @@ func maxSeq(seq int, items map[string]*item) int {
 type Dispatcher struct {
 	queue Queue
 	reg   *Registry
-	now   func() time.Time
+	clock clock.Clock
 	nudge chan struct{}
 	log   *log.Logger
 
 	mu      sync.Mutex
 	paused  bool
-	allowed []Class
+	allowed AllowedFunc
 	started bool
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -357,19 +362,21 @@ type Dispatcher struct {
 // NewDispatcher собирает разборщик.
 func NewDispatcher(q Queue, r *Registry) *Dispatcher {
 	return &Dispatcher{
-		queue:   q,
-		reg:     r,
-		now:     time.Now,
-		nudge:   make(chan struct{}, 1),
-		log:     log.Default(),
-		allowed: []Class{ClassInteractive, ClassBackground},
+		queue: q,
+		reg:   r,
+		clock: clock.Real{},
+		nudge: make(chan struct{}, 1),
+		log:   log.Default(),
+		allowed: func(time.Time) []Class {
+			return []Class{ClassInteractive, ClassBackground}
+		},
 	}
 }
 
-// SetNow подменяет часы; для проверок границ повтора.
-func (d *Dispatcher) SetNow(fn func() time.Time) {
-	if fn != nil {
-		d.now = fn
+// SetClock подменяет часы; для проверок границ повтора и ожидания.
+func (d *Dispatcher) SetClock(c clock.Clock) {
+	if c != nil {
+		d.clock = c
 	}
 }
 
@@ -487,20 +494,31 @@ func (d *Dispatcher) Paused() bool {
 // останавливает захват, как пустое расписание; ручная пауза этим не
 // отменяется. Возобновление будит разборщик подсказкой.
 func (d *Dispatcher) SetAllowed(classes []Class) {
+	allowed := append([]Class(nil), classes...)
+	d.SetAllowedFunc(func(time.Time) []Class {
+		return append([]Class(nil), allowed...)
+	})
+}
+
+// SetAllowedFunc задаёт правило выбора классов на момент захвата. Так
+// подключается расписание: оно учитывает простой и занятость запросами.
+func (d *Dispatcher) SetAllowedFunc(fn AllowedFunc) {
 	d.mu.Lock()
-	d.allowed = append([]Class(nil), classes...)
+	d.allowed = fn
 	d.mu.Unlock()
 	d.Notify()
 }
 
-// allowedClasses отдаёт копию разрешённых классов: разборщик не держит
-// мьютекс во время захвата.
-func (d *Dispatcher) allowedClasses() []Class {
+// allowedAt отдаёт классы на момент now. Функция копируется под мьютексом
+// и вызывается без него: расписание не должно ждать разборщик.
+func (d *Dispatcher) allowedAt(now time.Time) []Class {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([]Class, len(d.allowed))
-	copy(out, d.allowed)
-	return out
+	fn := d.allowed
+	d.mu.Unlock()
+	if fn == nil {
+		return []Class{ClassInteractive, ClassBackground}
+	}
+	return fn(now)
 }
 
 // Get отдаёт работу и её статус для показа снаружи. ok равно false, если
@@ -523,7 +541,8 @@ func (d *Dispatcher) Step(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	job, ok, err := d.queue.Claim(ctx, d.now(), d.allowedClasses())
+	now := d.clock.Now()
+	job, ok, err := d.queue.Claim(ctx, now, d.allowedAt(now))
 	if err != nil || !ok {
 		return false, err
 	}
@@ -538,17 +557,14 @@ func (d *Dispatcher) Step(ctx context.Context) (bool, error) {
 		if job.Attempts >= attempts(spec) {
 			return true, errors.Join(err, d.queue.Fail(ctx, job.ID))
 		}
-		return true, errors.Join(err, d.queue.Retry(ctx, job.ID, d.now().Add(backoff(spec))))
+		return true, errors.Join(err, d.queue.Retry(ctx, job.ID, now.Add(backoff(spec))))
 	}
 	return true, d.queue.Done(ctx, job.ID)
 }
 
 // Run разбирает очередь до отмены контекста: сначала всё доступное, затем
-// ждёт тикер или подсказку.
+// ждёт срабатывание часов или подсказку.
 func (d *Dispatcher) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -565,7 +581,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-d.clock.After(time.Second):
 		case <-d.nudge:
 		}
 	}

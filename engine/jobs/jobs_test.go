@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"go-wex/engine/clock"
 	"go-wex/engine/store"
 )
 
@@ -195,7 +196,7 @@ func TestStepSuccess(t *testing.T) {
 
 // TestStepRetryThenFail — ошибка даёт повтор с задержкой, затем отказ.
 func TestStepRetryThenFail(t *testing.T) {
-	now := time.Unix(1000, 0)
+	clk := clock.NewManual(time.Unix(1000, 0))
 	reg := NewRegistry()
 	if err := reg.Add("bad", Spec{
 		Handler:     func(context.Context, Job) error { return errors.New("нет связи") },
@@ -205,7 +206,7 @@ func TestStepRetryThenFail(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 	d := NewDispatcher(NewMemoryQueue(), reg)
-	d.SetNow(func() time.Time { return now })
+	d.SetClock(clk)
 	ctx := context.Background()
 
 	if _, err := d.Enqueue(ctx, "bad", nil, ""); err != nil {
@@ -226,7 +227,7 @@ func TestStepRetryThenFail(t *testing.T) {
 		t.Fatal("повтор раньше срока")
 	}
 
-	now = now.Add(10 * time.Second)
+	clk.Advance(10 * time.Second)
 	if handled, _ := d.Step(ctx); !handled {
 		t.Fatal("вторая попытка не взята")
 	}

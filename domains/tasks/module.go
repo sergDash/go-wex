@@ -38,7 +38,7 @@ func (m module) Register(r core.Registry) error {
 	r.HTTP("POST", "/api/tasks/resume", m.resume)
 
 	return r.Job(string(kind), jobs.Spec{
-		Class:       jobs.ClassBackground,
+		Class:       jobs.ClassInteractive,
 		Handler:     m.run,
 		MaxAttempts: 3,
 		Backoff:     time.Second,
@@ -69,11 +69,11 @@ type pauseView struct {
 	Paused bool `json:"paused"`
 }
 
-// classOr — класс, который получит работа: пустой означает фоновый,
+// classOr — класс, который получит работа: пустой означает интерактивный,
 // заданный правилом вида.
 func classOr(c jobs.Class) jobs.Class {
 	if c == "" {
-		return jobs.ClassBackground
+		return jobs.ClassInteractive
 	}
 	return c
 }

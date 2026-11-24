@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-2.schema.json",
+  "$id": "https://go-wex.local/httpapi-3.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
@@ -39,6 +39,33 @@
           "type": "string",
           "minLength": 1,
           "description": "файл хранилища относительно каталога запуска"
+        }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "description": "пороги простоя: после какого простоя разрешён класс работы",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["after", "class"],
+            "properties": {
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "description": "длительность в синтаксисе Go, например 10s или 5m"
+              },
+              "class": {
+                "type": "string",
+                "enum": ["interactive", "background"],
+                "description": "класс работы, который разрешён после порога"
+              }
+            }
+          }
         }
       }
     }
