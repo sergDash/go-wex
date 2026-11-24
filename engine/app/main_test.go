@@ -13,6 +13,7 @@ import (
 	"go-wex/engine/config"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
+	"go-wex/engine/process"
 	"go-wex/engine/schedule"
 )
 
@@ -27,7 +28,11 @@ func (fakeService) Stop(context.Context) error  { return nil }
 // виды работ — реестру работ, службы — общему списку.
 func TestRegistryDelegates(t *testing.T) {
 	api := httpapi.New("127.0.0.1:0", fstest.MapFS{})
-	reg := &registry{api: api, jobs: jobs.NewRegistry()}
+	reg := &registry{
+		api:      api,
+		jobs:     jobs.NewRegistry(),
+		commands: process.NewRegistry(),
+	}
 
 	reg.HTTP("GET", "/api/check", func(*http.Request) (any, error) { return "ok", nil })
 	rec := httptest.NewRecorder()
@@ -47,6 +52,13 @@ func TestRegistryDelegates(t *testing.T) {
 	reg.Service(fakeService{})
 	if len(reg.services) != 1 || reg.services[0].Name() != "fake" {
 		t.Fatalf("службы: %+v", reg.services)
+	}
+
+	if err := reg.Command("check", func(context.Context, []string) error { return nil }); err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	if _, ok := reg.commands.Lookup("check"); !ok {
+		t.Fatal("подкоманда не собрана")
 	}
 }
 

@@ -6,6 +6,8 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,20 +31,23 @@ func New(disp *jobs.Dispatcher) core.Module { return module{disp: disp} }
 
 func (module) Name() string { return "tasks" }
 
-// Register объявляет маршруты и вид работы. Обработчик остаётся в модуле:
-// разборщик лишь вызывает его по виду.
+// Register объявляет маршруты, вид работы и подкоманду. Обработчик работы
+// остаётся в модуле: разборщик лишь вызывает его по виду.
 func (m module) Register(r core.Registry) error {
 	r.HTTP("POST", "/api/tasks", m.enqueue)
 	r.HTTP("GET", "/api/tasks/{id}", m.status)
 	r.HTTP("POST", "/api/tasks/pause", m.pause)
 	r.HTTP("POST", "/api/tasks/resume", m.resume)
 
-	return r.Job(string(kind), jobs.Spec{
+	if err := r.Job(string(kind), jobs.Spec{
 		Class:       jobs.ClassInteractive,
 		Handler:     m.run,
 		MaxAttempts: 3,
 		Backoff:     time.Second,
-	})
+	}); err != nil {
+		return err
+	}
+	return r.Command("task", m.command)
 }
 
 // task — тело задачи: текст, класс, сколько первых попыток провалить нарочно
@@ -135,6 +140,49 @@ func (m module) resume(r *http.Request) (any, error) {
 		return nil, err
 	}
 	return pauseView{Paused: false}, nil
+}
+
+// command — подкоманда того же бинарника: выполняет одну задачу без служб
+// и печатает строку протокола с версией и результатом.
+func (m module) command(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("task", flag.ContinueOnError)
+	text := fs.String("text", "", "текст задачи")
+	class := fs.String("class", string(jobs.ClassInteractive), "класс работы")
+	failUntil := fs.Int("failUntil", 0, "сколько первых попыток провалить")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*text) == "" {
+		return errors.New("text обязателен")
+	}
+	if *failUntil < 0 {
+		return errors.New("failUntil не может быть отрицательным")
+	}
+
+	c := jobs.Class(*class)
+	if !c.Valid() {
+		return errors.New("class: interactive или background")
+	}
+
+	payload, err := json.Marshal(task{Text: *text, Class: c, FailUntil: *failUntil})
+	if err != nil {
+		return err
+	}
+	job := jobs.Job{ID: "command", Kind: kind, Class: c, Payload: payload, Attempts: 1}
+	if err := m.run(ctx, job); err != nil {
+		return err
+	}
+
+	out := struct {
+		Version int    `json:"version"`
+		Result  string `json:"result"`
+	}{Version: 1, Result: *text}
+	line, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(line))
+	return nil
 }
 
 // run — обработчик вида работы. Сначала ждёт задержку, затем проверяет,

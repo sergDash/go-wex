@@ -11,9 +11,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"go-wex/domains/demo"
 	"go-wex/domains/health"
 	"go-wex/domains/tasks"
 	"go-wex/engine/activity"
@@ -23,28 +25,84 @@ import (
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
+	"go-wex/engine/process"
 	"go-wex/engine/schedule"
 	"go-wex/engine/service"
 	"go-wex/engine/store"
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run разбирает настройки и выбирает режим: подкоманда или службы.
+func run() int {
 	cfgPath := flag.String("config", filepath.Join("config", "httpapi.json"), "файл настроек")
 	webDir := flag.String("web", "", "переопределить каталог интерфейса из настроек")
 	flag.Parse()
 
-	cfg, err := config.LoadHTTPAPI(*cfgPath)
-	if err != nil {
-		log.Fatalf("%v", err)
+	// Первый аргумент разбирается до настроек и служб: подкоманда не должна
+	// зависеть от файла настроек, который нужен службам.
+	if args := flag.Args(); len(args) > 0 {
+		return runCommand(args)
 	}
 
-	dir := cfg.Interface.Dir
-	if *webDir != "" {
-		dir = *webDir
-	}
-	dir, err = resolveDir(dir)
+	cfg, err := config.LoadHTTPAPI(*cfgPath)
 	if err != nil {
-		log.Fatalf("интерфейс: %v", err)
+		log.Printf("%v", err)
+		return 1
+	}
+	return runServer(cfg, *webDir)
+}
+
+// runCommand выполняет подкоманду вместо служб: HTTP, хранилище, журнал
+// и разборщик не поднимаются. Модули всё равно регистрируются, потому что
+// подкоманду объявляет модуль.
+func runCommand(args []string) int {
+	jobReg := jobs.NewRegistry()
+	disp := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
+	commands := process.NewRegistry()
+
+	// HTTP в режиме подкоманды не нужен: маршруты собираются в пустой приёмник.
+	reg := &registry{api: discardHTTP{}, jobs: jobReg, commands: commands}
+	for _, m := range moduleList(disp, journal.Discard{}) {
+		if err := m.Register(reg); err != nil {
+			log.Printf("модуль %s: %v", m.Name(), err)
+			return 1
+		}
+	}
+
+	name := args[0]
+	handler, ok := commands.Lookup(name)
+	if !ok {
+		names := commands.Names()
+		if len(names) == 0 {
+			fmt.Fprintf(os.Stderr, "неизвестный режим %q; подкоманд нет\n", name)
+		} else {
+			fmt.Fprintf(os.Stderr, "неизвестный режим %q; известны: %s\n", name, strings.Join(names, ", "))
+		}
+		return 2
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := handler(ctx, args[1:]); err != nil {
+		log.Printf("подкоманда %s: %v", name, err)
+		return 1
+	}
+	return 0
+}
+
+// runServer поднимает службы и работает до сигнала остановки.
+func runServer(cfg config.HTTPAPI, webDir string) int {
+	dir := cfg.Interface.Dir
+	if webDir != "" {
+		dir = webDir
+	}
+	dir, err := resolveDir(dir)
+	if err != nil {
+		log.Printf("интерфейс: %v", err)
+		return 1
 	}
 	log.Printf("интерфейс: %s", dir)
 
@@ -70,7 +128,8 @@ func main() {
 	// должна быть видна сразу, а не при первом запросе.
 	st, err := store.Open(cfg.Store.Path, nil)
 	if err != nil {
-		log.Fatalf("хранилище: %v", err)
+		log.Printf("хранилище: %v", err)
+		return 1
 	}
 
 	// Виды работ и очередь общие для модулей: модуль объявляет вид, а ставит
@@ -78,7 +137,8 @@ func main() {
 	jobReg := jobs.NewRegistry()
 	queue, err := jobs.OpenStoreQueue(st)
 	if err != nil {
-		log.Fatalf("очередь: %v", err)
+		log.Printf("очередь: %v", err)
+		return 1
 	}
 	disp := jobs.NewDispatcher(queue, jobReg)
 	disp.SetClock(clk)
@@ -88,27 +148,24 @@ func main() {
 	// пока идёт запрос, фон из набора убирается.
 	rules, err := scheduleRules(cfg.Schedule.Rules)
 	if err != nil {
-		log.Fatalf("расписание: %v", err)
+		log.Printf("расписание: %v", err)
+		return 1
 	}
 	sched, err := schedule.New(rules)
 	if err != nil {
-		log.Fatalf("расписание: %v", err)
+		log.Printf("расписание: %v", err)
+		return 1
 	}
 	disp.SetAllowedFunc(func(now time.Time) []jobs.Class {
 		return allowedNow(sched, meter, now)
 	})
 
-	// registry отдаёт модулю три возможности: маршруты, работы и службы.
-	reg := &registry{api: srv, jobs: jobReg}
-
-	// Список модулей — единственное место, где приложение знает о них.
-	modules := []core.Module{
-		health.New(),
-		tasks.New(disp),
-	}
-	for _, m := range modules {
+	commands := process.NewRegistry()
+	reg := &registry{api: srv, jobs: jobReg, commands: commands}
+	for _, m := range moduleList(disp, jw) {
 		if err := m.Register(reg); err != nil {
-			log.Fatalf("модуль %s: %v", m.Name(), err)
+			log.Printf("модуль %s: %v", m.Name(), err)
+			return 1
 		}
 		log.Printf("модуль: %s", m.Name())
 	}
@@ -123,12 +180,24 @@ func main() {
 	services = append(services, reg.services...)
 	services = append(services, disp, srv)
 	group := service.New(services...)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	log.Printf("go+wex: http://%s", cfg.Server.Addr)
 	if err := group.Run(ctx); err != nil {
-		log.Fatalf("остановка: %v", err)
+		log.Printf("остановка: %v", err)
+		return 1
+	}
+	return 0
+}
+
+// moduleList — единственное место, где приложение знает о модулях.
+func moduleList(disp *jobs.Dispatcher, jw journal.Writer) []core.Module {
+	return []core.Module{
+		health.New(),
+		tasks.New(disp),
+		demo.New(disp, jw),
 	}
 }
 
@@ -165,11 +234,24 @@ func checkIndex(dir string) error {
 	return nil
 }
 
+// httpRegistrar — то, куда модуль объявляет маршруты. В режиме подкоманды
+// это пустой приёмник: службы не поднимаются.
+type httpRegistrar interface {
+	HTTP(method, path string, h core.Handler)
+}
+
+// discardHTTP — пустой приёмник маршрутов для режима подкоманды.
+type discardHTTP struct{}
+
+func (discardHTTP) HTTP(string, string, core.Handler) {}
+
 // registry собирает возможности модуля: маршруты уходят HTTP-службе,
-// виды работ — реестру работ, службы — в общий список запуска.
+// виды работ — реестру работ, службы — в общий список запуска,
+// подкоманды — реестру режимов.
 type registry struct {
-	api      *httpapi.Server
+	api      httpRegistrar
 	jobs     *jobs.Registry
+	commands *process.Registry
 	services []service.Service
 }
 
@@ -183,6 +265,10 @@ func (r *registry) Job(kind string, spec jobs.Spec) error {
 
 func (r *registry) Service(s service.Service) {
 	r.services = append(r.services, s)
+}
+
+func (r *registry) Command(name string, run core.CommandHandler) error {
+	return r.commands.Add(name, process.Handler(run))
 }
 
 // scheduleRules переводит настройки в пороги расписания. Без правил

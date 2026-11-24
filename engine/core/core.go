@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"net/http"
 
 	"go-wex/engine/jobs"
@@ -12,6 +13,10 @@ import (
 // Handler — обработчик запроса: возвращает данные для общего конверта или
 // ошибку. Кодированием ответа занимается движок, а не модуль.
 type Handler func(*http.Request) (any, error)
+
+// CommandHandler — обработчик подкоманды: получает аргументы после её имени
+// и выполняет одну работу, не поднимая службы.
+type CommandHandler func(ctx context.Context, args []string) error
 
 // Error — ошибка с кодом ответа. Модуль возвращает её, когда клиенту нужен
 // не 500, а определённый код: 400 на неверный ввод, 404 на отсутствие.
@@ -36,4 +41,5 @@ type Registry interface {
 	HTTP(method, path string, h Handler)
 	Job(kind string, spec jobs.Spec) error
 	Service(s service.Service)
+	Command(name string, run CommandHandler) error
 }

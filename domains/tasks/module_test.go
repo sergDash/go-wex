@@ -18,14 +18,16 @@ import (
 // testRegistry — реестр для проверки объявлений модуля: запоминает маршруты
 // и виды работ, ничего не запускает.
 type testRegistry struct {
-	routes map[string]core.Handler
-	specs  map[jobs.Kind]jobs.Spec
+	routes   map[string]core.Handler
+	specs    map[jobs.Kind]jobs.Spec
+	commands map[string]core.CommandHandler
 }
 
 func newTestRegistry() *testRegistry {
 	return &testRegistry{
-		routes: map[string]core.Handler{},
-		specs:  map[jobs.Kind]jobs.Spec{},
+		routes:   map[string]core.Handler{},
+		specs:    map[jobs.Kind]jobs.Spec{},
+		commands: map[string]core.CommandHandler{},
 	}
 }
 
@@ -39,6 +41,11 @@ func (r *testRegistry) Job(kind string, spec jobs.Spec) error {
 }
 
 func (r *testRegistry) Service(service.Service) {}
+
+func (r *testRegistry) Command(name string, h core.CommandHandler) error {
+	r.commands[name] = h
+	return nil
+}
 
 // newDispatcher собирает разборщик с тем же правилом вида, что объявляет
 // модуль, но без запуска службы: проверки вызывают Step напрямую.
@@ -87,6 +94,9 @@ func TestRegister(t *testing.T) {
 	}
 	if spec.Class != jobs.ClassInteractive {
 		t.Fatalf("класс вида: %q", spec.Class)
+	}
+	if _, ok := reg.commands["task"]; !ok {
+		t.Fatal("подкоманда task не объявлена")
 	}
 }
 
@@ -225,5 +235,20 @@ func TestClassValidation(t *testing.T) {
 	view := value.(taskView)
 	if view.Class != jobs.ClassInteractive {
 		t.Fatalf("класс: %q", view.Class)
+	}
+}
+
+// TestCommand — подкоманда выполняет задачу без служб и отвергает пустой
+// текст и нарочитую ошибку.
+func TestCommand(t *testing.T) {
+	m := module{}
+	if err := m.command(context.Background(), []string{"-text", "раз"}); err != nil {
+		t.Fatalf("command: %v", err)
+	}
+	if err := m.command(context.Background(), nil); err == nil {
+		t.Fatal("пустой текст принят")
+	}
+	if err := m.command(context.Background(), []string{"-text", "раз", "-failUntil", "1"}); err == nil {
+		t.Fatal("нарочитая ошибка не вернулась")
 	}
 }
