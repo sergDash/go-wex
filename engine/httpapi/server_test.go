@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
+
+	"go-wex/engine/core"
 )
 
 // TestRegisterAndEncode — модуль объявляет маршрут, движок кодирует ответ
@@ -19,6 +21,9 @@ func TestRegisterAndEncode(t *testing.T) {
 	})
 	s.HTTP("GET", "/api/fail", func(*http.Request) (any, error) {
 		return nil, errors.New("отказ")
+	})
+	s.HTTP("GET", "/api/missing", func(*http.Request) (any, error) {
+		return nil, &core.Error{Status: http.StatusNotFound, Message: "нет такой вещи"}
 	})
 
 	okRec := httptest.NewRecorder()
@@ -49,6 +54,12 @@ func TestRegisterAndEncode(t *testing.T) {
 	}
 	if failBody.Error == "" {
 		t.Fatalf("отказ без текста: %s", failRec.Body.String())
+	}
+
+	missingRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(missingRec, httptest.NewRequest(http.MethodGet, "/api/missing", nil))
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("ошибка с кодом: получили %d", missingRec.Code)
 	}
 }
 

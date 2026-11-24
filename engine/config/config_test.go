@@ -21,7 +21,8 @@ func write(t *testing.T, body string) string {
 func TestLoadHTTPAPI(t *testing.T) {
 	path := write(t, `{
 		"server": {"addr": "127.0.0.1:9000"},
-		"interface": {"dir": "interface"}
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"}
 	}`)
 
 	c, err := LoadHTTPAPI(path)
@@ -34,13 +35,17 @@ func TestLoadHTTPAPI(t *testing.T) {
 	if c.Interface.Dir != "interface" {
 		t.Fatalf("каталог: %q", c.Interface.Dir)
 	}
+	if c.Store.Path != "data/store.json" {
+		t.Fatalf("хранилище: %q", c.Store.Path)
+	}
 }
 
 // TestUnknownKey — опечатка в имени настройки даёт ошибку, а не тишину.
 func TestUnknownKey(t *testing.T) {
 	path := write(t, `{
 		"server": {"addr": "127.0.0.1:9000", "adr": "опечатка"},
-		"interface": {"dir": "interface"}
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"}
 	}`)
 
 	_, err := LoadHTTPAPI(path)
@@ -56,7 +61,8 @@ func TestUnknownKey(t *testing.T) {
 func TestEmptyAddr(t *testing.T) {
 	path := write(t, `{
 		"server": {"addr": ""},
-		"interface": {"dir": "interface"}
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"}
 	}`)
 
 	_, err := LoadHTTPAPI(path)
@@ -73,5 +79,22 @@ func TestEmptyAddr(t *testing.T) {
 func TestShippedConfig(t *testing.T) {
 	if _, err := LoadHTTPAPI(filepath.Join("..", "..", "config", "httpapi.json")); err != nil {
 		t.Fatalf("config/httpapi.json: %v", err)
+	}
+}
+
+// TestEmptyStorePath — пустой путь к хранилищу не допускается.
+func TestEmptyStorePath(t *testing.T) {
+	path := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": ""}
+	}`)
+
+	_, err := LoadHTTPAPI(path)
+	if err == nil {
+		t.Fatal("жали ошибку пустого пути хранилища")
+	}
+	if !strings.Contains(err.Error(), "store.path") {
+		t.Fatalf("ошибка не называет поле: %v", err)
 	}
 }

@@ -82,11 +82,21 @@ func (s *Server) HTTP(method, path string, h core.Handler) {
 	s.mux.HandleFunc(method+" "+path, func(w http.ResponseWriter, r *http.Request) {
 		value, err := h(r)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, errorStatus(err), err.Error())
 			return
 		}
 		writeResult(w, http.StatusOK, value)
 	})
+}
+
+// errorStatus — код ответа по ошибке обработчика: модуль может назвать код
+// через core.Error, остальные ошибки считаются внутренними.
+func errorStatus(err error) int {
+	var e *core.Error
+	if errors.As(err, &e) && e.Status != 0 {
+		return e.Status
+	}
+	return http.StatusInternalServerError
 }
 
 // Handler отдаёт обработчик для проверок без запуска сокета.

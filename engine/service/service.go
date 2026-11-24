@@ -22,6 +22,16 @@ type Service interface {
 	Stop(ctx context.Context) error
 }
 
+// Pausable — служба, которая умеет приостановить работу и продолжить её.
+// Пауза — необязательная возможность: HTTP-серверу она не нужна, разборщику
+// и управляемому процессу нужна. Пауза не освобождает порты и файлы — для
+// этого есть Stop; она прекращает брать новую работу, чтобы снизить нагрузку
+// или разобрать состояние при отладке.
+type Pausable interface {
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+}
+
 // Group — набор служб: запуск в порядке списка, остановка в обратном.
 type Group struct {
 	services []Service
@@ -60,6 +70,38 @@ func (g *Group) stop(started []Service) error {
 	for i := len(started) - 1; i >= 0; i-- {
 		if err := started[i].Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("служба %s: %w", started[i].Name(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Pause приостанавливает службы в обратном порядке запуска. Службы без
+// Pausable пропускаются: пауза — необязательная возможность. Ошибка одной
+// службы не мешает остальным, но возвращается вместе с остальными.
+func (g *Group) Pause(ctx context.Context) error {
+	var errs []error
+	for i := len(g.services) - 1; i >= 0; i-- {
+		p, ok := g.services[i].(Pausable)
+		if !ok {
+			continue
+		}
+		if err := p.Pause(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("служба %s: %w", g.services[i].Name(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Resume продолжает службы в порядке запуска.
+func (g *Group) Resume(ctx context.Context) error {
+	var errs []error
+	for _, s := range g.services {
+		p, ok := s.(Pausable)
+		if !ok {
+			continue
+		}
+		if err := p.Resume(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("служба %s: %w", s.Name(), err))
 		}
 	}
 	return errors.Join(errs...)

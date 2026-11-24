@@ -4,5 +4,8 @@
   },
   "interface": {
     "dir": "interface"
+  },
+  "store": {
+    "path": "data/store.json"
   }
 }

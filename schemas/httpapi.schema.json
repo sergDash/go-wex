@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-1.schema.json",
+  "$id": "https://go-wex.local/httpapi-2.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
-  "required": ["server", "interface"],
+  "required": ["server", "interface", "store"],
   "properties": {
     "server": {
       "type": "object",
@@ -27,6 +27,18 @@
           "type": "string",
           "minLength": 1,
           "description": "каталог статики относительно каталога запуска"
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "файл хранилища относительно каталога запуска"
         }
       }
     }

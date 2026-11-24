@@ -1,7 +1,8 @@
 // Package config — настройки приложения из файлов config/<предмет>.json.
-// Здесь настройки HTTP-службы: адрес и каталог интерфейса. Проверка идёт при
-// загрузке: неизвестный ключ и пустое обязательное значение считаются ошибкой,
-// чтобы приложение не работало с половиной настроек.
+// Здесь настройки HTTP-службы (адрес и каталог интерфейса) и путь к файлу
+// хранилища. Проверка идёт при загрузке: неизвестный ключ и пустое
+// обязательное значение считаются ошибкой, чтобы приложение не работало
+// с половиной настроек.
 package config
 
 import (
@@ -15,10 +16,12 @@ import (
 // HTTPAPI — настройки HTTP-службы.
 //
 // Server.Addr — адрес, который занимает служба. Interface.Dir — каталог
-// статики, откуда читаются файлы интерфейса.
+// статики, откуда читаются файлы интерфейса. Store.Path — файл хранилища,
+// в котором очередь переживает перезапуск.
 type HTTPAPI struct {
 	Server    Server    `json:"server"`
 	Interface Interface `json:"interface"`
+	Store     Store     `json:"store"`
 }
 
 // Server — настройки адреса HTTP-службы.
@@ -29,6 +32,11 @@ type Server struct {
 // Interface — настройки каталога статики.
 type Interface struct {
 	Dir string `json:"dir"`
+}
+
+// Store — настройки файла хранилища.
+type Store struct {
+	Path string `json:"path"`
 }
 
 // LoadHTTPAPI читает настройки HTTP-службы по пути path. Неизвестные ключи
@@ -53,14 +61,17 @@ func LoadHTTPAPI(path string) (HTTPAPI, error) {
 	return c, nil
 }
 
-// validate проверяет обязательные значения. Список короткий: адрес сервера
-// и каталог интерфейса, без которых приложение не запустится.
+// validate проверяет обязательные значения. Список короткий: адрес сервера,
+// каталог интерфейса и путь к хранилищу, без которых приложение не запустится.
 func (c HTTPAPI) validate() error {
 	if strings.TrimSpace(c.Server.Addr) == "" {
 		return errors.New("server.addr обязателен")
 	}
 	if strings.TrimSpace(c.Interface.Dir) == "" {
 		return errors.New("interface.dir обязателен")
+	}
+	if strings.TrimSpace(c.Store.Path) == "" {
+		return errors.New("store.path обязателен")
 	}
 	return nil
 }
