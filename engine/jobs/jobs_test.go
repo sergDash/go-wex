@@ -10,21 +10,24 @@ import (
 	"go-wex/engine/store"
 )
 
+// allClasses — набор, при котором разборщик берёт любую работу.
+var allClasses = []Class{ClassInteractive, ClassBackground}
+
 // TestMemoryQueueOrder — работы забираются по сроку, при равенстве по номеру.
 func TestMemoryQueueOrder(t *testing.T) {
 	q := NewMemoryQueue()
 	ctx := context.Background()
 
-	first, err := q.Enqueue(ctx, "a", map[string]int{"n": 1})
+	first, err := q.Enqueue(ctx, "a", map[string]int{"n": 1}, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	second, err := q.Enqueue(ctx, "b", map[string]int{"n": 2})
+	second, err := q.Enqueue(ctx, "b", map[string]int{"n": 2}, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	job, ok, err := q.Claim(ctx, time.Now())
+	job, ok, err := q.Claim(ctx, time.Now(), allClasses)
 	if err != nil || !ok {
 		t.Fatalf("Claim: ok=%v err=%v", ok, err)
 	}
@@ -35,7 +38,7 @@ func TestMemoryQueueOrder(t *testing.T) {
 		t.Fatalf("попытка: %d", job.Attempts)
 	}
 
-	job, ok, err = q.Claim(ctx, time.Now())
+	job, ok, err = q.Claim(ctx, time.Now(), allClasses)
 	if err != nil || !ok {
 		t.Fatalf("Claim второй: ok=%v err=%v", ok, err)
 	}
@@ -43,8 +46,130 @@ func TestMemoryQueueOrder(t *testing.T) {
 		t.Fatalf("вторая работа: получили %s, ждали %s", job.ID, second)
 	}
 
-	if _, ok, _ := q.Claim(ctx, time.Now()); ok {
+	if _, ok, _ := q.Claim(ctx, time.Now(), allClasses); ok {
 		t.Fatal("третья работа: очередь должна быть пуста")
+	}
+}
+
+// TestClaimClassOrder — интерактивная работа идёт раньше фоновой, даже если
+// поставлена позже.
+func TestClaimClassOrder(t *testing.T) {
+	q := NewMemoryQueue()
+	ctx := context.Background()
+
+	background, err := q.Enqueue(ctx, "bg", nil, ClassBackground)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	interactive, err := q.Enqueue(ctx, "fg", nil, ClassInteractive)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	job, ok, err := q.Claim(ctx, time.Now(), allClasses)
+	if err != nil || !ok {
+		t.Fatalf("Claim: ok=%v err=%v", ok, err)
+	}
+	if job.ID != interactive || job.Class != ClassInteractive {
+		t.Fatalf("первая работа: id=%s class=%s", job.ID, job.Class)
+	}
+
+	job, ok, err = q.Claim(ctx, time.Now(), allClasses)
+	if err != nil || !ok {
+		t.Fatalf("Claim второй: ok=%v err=%v", ok, err)
+	}
+	if job.ID != background {
+		t.Fatalf("вторая работа: id=%s", job.ID)
+	}
+}
+
+// TestClaimAllowedClasses — берутся только разрешённые классы; пустой
+// список не берёт ничего.
+func TestClaimAllowedClasses(t *testing.T) {
+	q := NewMemoryQueue()
+	ctx := context.Background()
+
+	background, err := q.Enqueue(ctx, "bg", nil, ClassBackground)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	interactive, err := q.Enqueue(ctx, "fg", nil, ClassInteractive)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	if _, ok, _ := q.Claim(ctx, time.Now(), nil); ok {
+		t.Fatal("пустой список разрешил работу")
+	}
+
+	job, ok, err := q.Claim(ctx, time.Now(), []Class{ClassBackground})
+	if err != nil || !ok || job.ID != background {
+		t.Fatalf("фон: ok=%v err=%v id=%s", ok, err, job.ID)
+	}
+
+	job, ok, err = q.Claim(ctx, time.Now(), []Class{ClassInteractive})
+	if err != nil || !ok || job.ID != interactive {
+		t.Fatalf("интерактив: ok=%v err=%v id=%s", ok, err, job.ID)
+	}
+}
+
+// TestClassDefaultAndValidation — пустой класс берётся из вида, неизвестный
+// класс отвергается и при объявлении вида, и при постановке.
+func TestClassDefaultAndValidation(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("ok", Spec{
+		Class:   ClassInteractive,
+		Handler: func(context.Context, Job) error { return nil },
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := NewDispatcher(NewMemoryQueue(), reg)
+	ctx := context.Background()
+
+	id, err := d.Enqueue(ctx, "ok", nil, "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	job, _, ok, err := d.Get(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("Get: ok=%v err=%v", ok, err)
+	}
+	if job.Class != ClassInteractive {
+		t.Fatalf("класс по умолчанию: %q", job.Class)
+	}
+
+	if _, err := d.Enqueue(ctx, "ok", nil, Class("urgent")); err == nil {
+		t.Fatal("неизвестный класс принят")
+	}
+
+	bad := NewRegistry()
+	if err := bad.Add("bad", Spec{Class: Class("urgent"), Handler: func(context.Context, Job) error { return nil }}); err == nil {
+		t.Fatal("вид с неизвестным классом принят")
+	}
+}
+
+// TestSetAllowed — пустой набор классов останавливает захват, полный
+// возвращает разборщик к работе.
+func TestSetAllowed(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("ok", Spec{Handler: func(context.Context, Job) error { return nil }}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := NewDispatcher(NewMemoryQueue(), reg)
+	ctx := context.Background()
+
+	if _, err := d.Enqueue(ctx, "ok", nil, ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	d.SetAllowed(nil)
+	if handled, _ := d.Step(ctx); handled {
+		t.Fatal("пустой набор классов разрешил работу")
+	}
+
+	d.SetAllowed(allClasses)
+	if handled, err := d.Step(ctx); err != nil || !handled {
+		t.Fatalf("полный набор: handled=%v err=%v", handled, err)
 	}
 }
 
@@ -56,7 +181,7 @@ func TestStepSuccess(t *testing.T) {
 	}
 	d := NewDispatcher(NewMemoryQueue(), reg)
 
-	if _, err := d.Enqueue(context.Background(), "ok", nil); err != nil {
+	if _, err := d.Enqueue(context.Background(), "ok", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	handled, err := d.Step(context.Background())
@@ -83,7 +208,7 @@ func TestStepRetryThenFail(t *testing.T) {
 	d.SetNow(func() time.Time { return now })
 	ctx := context.Background()
 
-	if _, err := d.Enqueue(ctx, "bad", nil); err != nil {
+	if _, err := d.Enqueue(ctx, "bad", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
@@ -124,7 +249,7 @@ func TestStepPanic(t *testing.T) {
 	d := NewDispatcher(NewMemoryQueue(), reg)
 	ctx := context.Background()
 
-	if _, err := d.Enqueue(ctx, "panic", nil); err != nil {
+	if _, err := d.Enqueue(ctx, "panic", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
@@ -150,7 +275,7 @@ func TestStepPaused(t *testing.T) {
 	d := NewDispatcher(NewMemoryQueue(), reg)
 	ctx := context.Background()
 
-	if _, err := d.Enqueue(ctx, "ok", nil); err != nil {
+	if _, err := d.Enqueue(ctx, "ok", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
@@ -185,10 +310,10 @@ func TestPauseDuringWork(t *testing.T) {
 	d = NewDispatcher(NewMemoryQueue(), reg)
 	ctx := context.Background()
 
-	if _, err := d.Enqueue(ctx, "slow", nil); err != nil {
+	if _, err := d.Enqueue(ctx, "slow", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, err := d.Enqueue(ctx, "slow", nil); err != nil {
+	if _, err := d.Enqueue(ctx, "slow", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
@@ -209,7 +334,7 @@ func TestGetStatus(t *testing.T) {
 	d := NewDispatcher(NewMemoryQueue(), reg)
 	ctx := context.Background()
 
-	id, err := d.Enqueue(ctx, "ok", nil)
+	id, err := d.Enqueue(ctx, "ok", nil, "")
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -246,7 +371,7 @@ func TestStepStopped(t *testing.T) {
 	}
 	d := NewDispatcher(NewMemoryQueue(), reg)
 
-	if _, err := d.Enqueue(context.Background(), "ok", nil); err != nil {
+	if _, err := d.Enqueue(context.Background(), "ok", nil, ""); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
@@ -276,7 +401,7 @@ func TestServiceStartStop(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	id, err := d.Enqueue(ctx, "ok", nil)
+	id, err := d.Enqueue(ctx, "ok", nil, "")
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -321,7 +446,7 @@ func TestStoreQueueEnqueuePersists(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	id, err := q.Enqueue(ctx, "ok", map[string]int{"n": 1})
+	id, err := q.Enqueue(ctx, "ok", map[string]int{"n": 1}, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -346,11 +471,11 @@ func TestStoreQueueRunningRecovers(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	id, err := q.Enqueue(ctx, "ok", nil)
+	id, err := q.Enqueue(ctx, "ok", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, ok, err := q.Claim(ctx, time.Now()); err != nil || !ok {
+	if _, ok, err := q.Claim(ctx, time.Now(), allClasses); err != nil || !ok {
 		t.Fatalf("Claim: ok=%v err=%v", ok, err)
 	}
 
@@ -363,7 +488,7 @@ func TestStoreQueueRunningRecovers(t *testing.T) {
 		t.Fatalf("восстановление: status=%q attempts=%d", status, job.Attempts)
 	}
 
-	job, ok, err = q2.Claim(ctx, time.Now())
+	job, ok, err = q2.Claim(ctx, time.Now(), allClasses)
 	if err != nil || !ok {
 		t.Fatalf("повторный Claim: ok=%v err=%v", ok, err)
 	}
@@ -379,15 +504,15 @@ func TestStoreQueueSeqContinues(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	if _, err := q.Enqueue(ctx, "ok", nil); err != nil {
+	if _, err := q.Enqueue(ctx, "ok", nil, ClassBackground); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, err := q.Enqueue(ctx, "ok", nil); err != nil {
+	if _, err := q.Enqueue(ctx, "ok", nil, ClassBackground); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
 	q2 := openStoreQueue(t, path)
-	id, err := q2.Enqueue(ctx, "ok", nil)
+	id, err := q2.Enqueue(ctx, "ok", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue после перезапуска: %v", err)
 	}
@@ -403,11 +528,11 @@ func TestStoreQueueStatusPersists(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	id, err := q.Enqueue(ctx, "ok", nil)
+	id, err := q.Enqueue(ctx, "ok", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, ok, err := q.Claim(ctx, time.Now()); err != nil || !ok {
+	if _, ok, err := q.Claim(ctx, time.Now(), allClasses); err != nil || !ok {
 		t.Fatalf("Claim: ok=%v err=%v", ok, err)
 	}
 	if err := q.Done(ctx, id); err != nil {

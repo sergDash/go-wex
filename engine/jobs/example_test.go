@@ -24,7 +24,7 @@ func ExampleDispatcher() {
 	}
 
 	d := NewDispatcher(NewMemoryQueue(), reg)
-	id, err := d.Enqueue(context.Background(), "report", map[string]string{"since": "2026-11-01"})
+	id, err := d.Enqueue(context.Background(), "report", map[string]string{"since": "2026-11-01"}, ClassBackground)
 	if err != nil {
 		panic(err)
 	}

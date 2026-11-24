@@ -81,6 +81,9 @@ func TestRegister(t *testing.T) {
 	if !ok || spec.Handler == nil {
 		t.Fatalf("вид работы %q: spec=%+v ok=%v", kind, spec, ok)
 	}
+	if spec.Class != jobs.ClassBackground {
+		t.Fatalf("класс вида: %q", spec.Class)
+	}
 }
 
 // TestEnqueueAndRun — запрос ставит задачу, шаг разборщика выполняет её,
@@ -98,6 +101,9 @@ func TestEnqueueAndRun(t *testing.T) {
 	queued, ok := value.(taskView)
 	if !ok || queued.Status != jobs.StatusQueued || queued.ID == "" {
 		t.Fatalf("ответ постановки: %+v", value)
+	}
+	if queued.Class != jobs.ClassBackground {
+		t.Fatalf("класс по умолчанию: %q", queued.Class)
 	}
 
 	if handled, err := m.disp.Step(ctx); err != nil || !handled {
@@ -192,5 +198,28 @@ func TestEnqueueValidation(t *testing.T) {
 	var e *core.Error
 	if !errors.As(err, &e) || e.Status != http.StatusBadRequest {
 		t.Fatalf("ошибка: %v", err)
+	}
+}
+
+// TestClassValidation — класс из запроса проверяется, интерактивный
+// сохраняется в работе.
+func TestClassValidation(t *testing.T) {
+	_, err := (module{}).enqueue(httptest.NewRequest(http.MethodPost, "/api/tasks",
+		strings.NewReader(`{"text":"раз","class":"urgent"}`)))
+	var e *core.Error
+	if !errors.As(err, &e) || e.Status != http.StatusBadRequest {
+		t.Fatalf("неизвестный класс: %v", err)
+	}
+
+	m := module{}
+	m.disp = newDispatcher(t, m)
+	value, err := m.enqueue(httptest.NewRequest(http.MethodPost, "/api/tasks",
+		strings.NewReader(`{"text":"раз","class":"interactive"}`)))
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	view := value.(taskView)
+	if view.Class != jobs.ClassInteractive {
+		t.Fatalf("класс: %q", view.Class)
 	}
 }

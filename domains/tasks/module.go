@@ -38,32 +38,44 @@ func (m module) Register(r core.Registry) error {
 	r.HTTP("POST", "/api/tasks/resume", m.resume)
 
 	return r.Job(string(kind), jobs.Spec{
+		Class:       jobs.ClassBackground,
 		Handler:     m.run,
 		MaxAttempts: 3,
 		Backoff:     time.Second,
 	})
 }
 
-// task — тело задачи: текст, сколько первых попыток провалить нарочно и
-// задержка перед результатом. FailUntil и DelayMS — для проверки повторов
+// task — тело задачи: текст, класс, сколько первых попыток провалить нарочно
+// и задержка перед результатом. FailUntil и DelayMS — для проверки повторов
 // и состояния running, в обычной задаче они нулевые.
 type task struct {
-	Text      string `json:"text"`
-	FailUntil int    `json:"failUntil"`
-	DelayMS   int    `json:"delayMs"`
+	Text      string     `json:"text"`
+	Class     jobs.Class `json:"class"`
+	FailUntil int        `json:"failUntil"`
+	DelayMS   int        `json:"delayMs"`
 }
 
-// taskView — то, что видит клиент: номер, статус, текст и номер попытки.
+// taskView — то, что видит клиент: номер, класс, статус, текст и попытка.
 type taskView struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Text     string `json:"text"`
-	Attempts int    `json:"attempts"`
+	ID       string     `json:"id"`
+	Class    jobs.Class `json:"class"`
+	Status   string     `json:"status"`
+	Text     string     `json:"text"`
+	Attempts int        `json:"attempts"`
 }
 
 // pauseView — состояние паузы разборщика.
 type pauseView struct {
 	Paused bool `json:"paused"`
+}
+
+// classOr — класс, который получит работа: пустой означает фоновый,
+// заданный правилом вида.
+func classOr(c jobs.Class) jobs.Class {
+	if c == "" {
+		return jobs.ClassBackground
+	}
+	return c
 }
 
 // enqueue принимает задачу и сразу отдаёт номер. Выполнение начинается
@@ -79,12 +91,15 @@ func (m module) enqueue(r *http.Request) (any, error) {
 	if in.FailUntil < 0 || in.DelayMS < 0 {
 		return nil, &core.Error{Status: http.StatusBadRequest, Message: "failUntil и delayMs не могут быть отрицательными"}
 	}
+	if in.Class != "" && !in.Class.Valid() {
+		return nil, &core.Error{Status: http.StatusBadRequest, Message: "class: interactive или background"}
+	}
 
-	id, err := m.disp.Enqueue(r.Context(), kind, in)
+	id, err := m.disp.Enqueue(r.Context(), kind, in, in.Class)
 	if err != nil {
 		return nil, err
 	}
-	return taskView{ID: id, Status: jobs.StatusQueued, Text: in.Text}, nil
+	return taskView{ID: id, Class: classOr(in.Class), Status: jobs.StatusQueued, Text: in.Text}, nil
 }
 
 // status отдаёт работу и её статус по номеру. Очередь лежит в хранилище,
@@ -103,7 +118,7 @@ func (m module) status(r *http.Request) (any, error) {
 	if err := json.Unmarshal(job.Payload, &in); err != nil {
 		return nil, fmt.Errorf("тело задачи %s: %w", id, err)
 	}
-	return taskView{ID: job.ID, Status: status, Text: in.Text, Attempts: job.Attempts}, nil
+	return taskView{ID: job.ID, Class: job.Class, Status: status, Text: in.Text, Attempts: job.Attempts}, nil
 }
 
 // pause останавливает захват новых работ: начатая доигрывается.

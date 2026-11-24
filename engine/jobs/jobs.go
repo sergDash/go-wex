@@ -19,11 +19,26 @@ import (
 // Kind — вид работы; по нему выбирается обработчик.
 type Kind string
 
+// Class — класс работы. Интерактивная нужна ответу сейчас, фоновая может
+// ждать: при выборе следующей работы интерактивная идёт первой.
+type Class string
+
+const (
+	ClassInteractive Class = "interactive"
+	ClassBackground  Class = "background"
+)
+
+// Valid сообщает, известен ли класс.
+func (c Class) Valid() bool {
+	return c == ClassInteractive || c == ClassBackground
+}
+
 // Job — работа в очереди. Attempts считается при захвате, поэтому обработчик
 // видит номер текущей попытки. Теги JSON — форма записи в хранилище.
 type Job struct {
 	ID          string          `json:"id"`
 	Kind        Kind            `json:"kind"`
+	Class       Class           `json:"class"`
 	Payload     json.RawMessage `json:"payload"`
 	Attempts    int             `json:"attempts"`
 	AvailableAt time.Time       `json:"availableAt"`
@@ -36,16 +51,18 @@ type Handler func(context.Context, Job) error
 // Queue — хранилище работ. Реализация в памяти годится для образца; долговечная
 // очередь реализует тот же набор методов поверх хранилища.
 type Queue interface {
-	Enqueue(ctx context.Context, kind Kind, payload any) (string, error)
-	Claim(ctx context.Context, now time.Time) (Job, bool, error)
+	Enqueue(ctx context.Context, kind Kind, payload any, class Class) (string, error)
+	Claim(ctx context.Context, now time.Time, allowed []Class) (Job, bool, error)
 	Done(ctx context.Context, id string) error
 	Retry(ctx context.Context, id string, at time.Time) error
 	Fail(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (Job, string, bool, error)
 }
 
-// Spec — правило вида работы.
+// Spec — правило вида работы. Class — класс по умолчанию: если при
+// постановке класс не задан, работа получает этот.
 type Spec struct {
+	Class       Class
 	Handler     Handler
 	MaxAttempts int
 	Backoff     time.Duration
@@ -66,6 +83,9 @@ func NewRegistry() *Registry {
 func (r *Registry) Add(k Kind, s Spec) error {
 	if _, ok := r.specs[k]; ok {
 		return fmt.Errorf("jobs: вид %q уже объявлен", k)
+	}
+	if s.Class != "" && !s.Class.Valid() {
+		return fmt.Errorf("jobs: вид %q: неизвестный класс %q", k, s.Class)
 	}
 	r.specs[k] = s
 	return nil
@@ -143,15 +163,21 @@ func OpenStoreQueue(s *store.Store) (Queue, error) {
 	}
 	q.seq = maxSeq(st.Seq, q.items)
 
-	recovered := false
+	changed := false
 	for _, it := range q.items {
+		// Записи без класса появились до его введения: фон — безопасное
+		// умолчание, такая работа не обгоняет интерактивную.
+		if it.Job.Class == "" {
+			it.Job.Class = ClassBackground
+			changed = true
+		}
 		if it.Status == StatusRunning {
 			it.Status = StatusQueued
 			it.Job.AvailableAt = time.Time{}
-			recovered = true
+			changed = true
 		}
 	}
-	if recovered {
+	if changed {
 		if err := q.persist(); err != nil {
 			return nil, err
 		}
@@ -160,7 +186,14 @@ func OpenStoreQueue(s *store.Store) (Queue, error) {
 }
 
 // Enqueue кладёт работу со статусом queued и возвращает её номер.
-func (q *queue) Enqueue(_ context.Context, kind Kind, payload any) (string, error) {
+func (q *queue) Enqueue(_ context.Context, kind Kind, payload any, class Class) (string, error) {
+	if class == "" {
+		class = ClassBackground
+	}
+	if !class.Valid() {
+		return "", fmt.Errorf("jobs: неизвестный класс %q", class)
+	}
+
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("jobs: тело работы %q: %w", kind, err)
@@ -170,7 +203,7 @@ func (q *queue) Enqueue(_ context.Context, kind Kind, payload any) (string, erro
 	defer q.mu.Unlock()
 	q.seq++
 	id := fmt.Sprintf("%06d", q.seq)
-	q.items[id] = &item{Job: Job{ID: id, Kind: kind, Payload: raw}, Status: StatusQueued}
+	q.items[id] = &item{Job: Job{ID: id, Kind: kind, Class: class, Payload: raw}, Status: StatusQueued}
 	if err := q.persist(); err != nil {
 		delete(q.items, id)
 		q.seq--
@@ -179,19 +212,20 @@ func (q *queue) Enqueue(_ context.Context, kind Kind, payload any) (string, erro
 	return id, nil
 }
 
-// Claim забирает одну работу, доступную к моменту now: раньше всех по сроку,
-// при равенстве — по номеру. Работа становится running, попытка растёт.
-func (q *queue) Claim(_ context.Context, now time.Time) (Job, bool, error) {
+// Claim забирает одну работу из разрешённых классов, доступную к моменту now:
+// сначала интерактивные, внутри класса — раньше всех по сроку, при равенстве
+// по номеру. Пустой allowed означает, что брать нечего: это пауза
+// по расписанию.
+func (q *queue) Claim(_ context.Context, now time.Time, allowed []Class) (Job, bool, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	var chosen *item
 	for _, it := range q.items {
-		if it.Status != StatusQueued || it.Job.AvailableAt.After(now) {
+		if it.Status != StatusQueued || it.Job.AvailableAt.After(now) || !classAllowed(allowed, it.Job.Class) {
 			continue
 		}
-		if chosen == nil || it.Job.AvailableAt.Before(chosen.Job.AvailableAt) ||
-			(it.Job.AvailableAt.Equal(chosen.Job.AvailableAt) && it.Job.ID < chosen.Job.ID) {
+		if chosen == nil || earlier(it, chosen) {
 			chosen = it
 		}
 	}
@@ -207,6 +241,28 @@ func (q *queue) Claim(_ context.Context, now time.Time) (Job, bool, error) {
 		return Job{}, false, err
 	}
 	return chosen.Job, true, nil
+}
+
+// earlier сообщает, должна ли работа a быть взята раньше b: интерактивная
+// раньше фоновой, внутри класса — по сроку, при равенстве — по номеру.
+func earlier(a, b *item) bool {
+	if a.Job.Class != b.Job.Class {
+		return a.Job.Class == ClassInteractive
+	}
+	if !a.Job.AvailableAt.Equal(b.Job.AvailableAt) {
+		return a.Job.AvailableAt.Before(b.Job.AvailableAt)
+	}
+	return a.Job.ID < b.Job.ID
+}
+
+// classAllowed сообщает, разрешён ли класс. Пустой список не разрешает ничего.
+func classAllowed(allowed []Class, class Class) bool {
+	for _, c := range allowed {
+		if c == class {
+			return true
+		}
+	}
+	return false
 }
 
 // Get отдаёт работу и её статус. ok равно false, если работы нет.
@@ -292,6 +348,7 @@ type Dispatcher struct {
 
 	mu      sync.Mutex
 	paused  bool
+	allowed []Class
 	started bool
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -300,11 +357,12 @@ type Dispatcher struct {
 // NewDispatcher собирает разборщик.
 func NewDispatcher(q Queue, r *Registry) *Dispatcher {
 	return &Dispatcher{
-		queue: q,
-		reg:   r,
-		now:   time.Now,
-		nudge: make(chan struct{}, 1),
-		log:   log.Default(),
+		queue:   q,
+		reg:     r,
+		now:     time.Now,
+		nudge:   make(chan struct{}, 1),
+		log:     log.Default(),
+		allowed: []Class{ClassInteractive, ClassBackground},
 	}
 }
 
@@ -366,9 +424,24 @@ func (d *Dispatcher) Stop(ctx context.Context) error {
 	}
 }
 
-// Enqueue ставит работу и будит разборщик.
-func (d *Dispatcher) Enqueue(ctx context.Context, kind Kind, payload any) (string, error) {
-	id, err := d.queue.Enqueue(ctx, kind, payload)
+// Enqueue ставит работу и будит разборщик. Пустой класс берётся из правила
+// вида; если и там пусто, работа считается фоновой.
+func (d *Dispatcher) Enqueue(ctx context.Context, kind Kind, payload any, class Class) (string, error) {
+	spec, ok := d.reg.Spec(kind)
+	if !ok {
+		return "", fmt.Errorf("jobs: вид %q не объявлен", kind)
+	}
+	if class == "" {
+		class = spec.Class
+	}
+	if class == "" {
+		class = ClassBackground
+	}
+	if !class.Valid() {
+		return "", fmt.Errorf("jobs: неизвестный класс %q", class)
+	}
+
+	id, err := d.queue.Enqueue(ctx, kind, payload, class)
 	if err != nil {
 		return "", err
 	}
@@ -410,6 +483,26 @@ func (d *Dispatcher) Paused() bool {
 	return d.paused
 }
 
+// SetAllowed задаёт классы, которые разборщик берёт сейчас. Пустой список
+// останавливает захват, как пустое расписание; ручная пауза этим не
+// отменяется. Возобновление будит разборщик подсказкой.
+func (d *Dispatcher) SetAllowed(classes []Class) {
+	d.mu.Lock()
+	d.allowed = append([]Class(nil), classes...)
+	d.mu.Unlock()
+	d.Notify()
+}
+
+// allowedClasses отдаёт копию разрешённых классов: разборщик не держит
+// мьютекс во время захвата.
+func (d *Dispatcher) allowedClasses() []Class {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]Class, len(d.allowed))
+	copy(out, d.allowed)
+	return out
+}
+
 // Get отдаёт работу и её статус для показа снаружи. ok равно false, если
 // работы нет.
 func (d *Dispatcher) Get(ctx context.Context, id string) (Job, string, bool, error) {
@@ -430,7 +523,7 @@ func (d *Dispatcher) Step(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	job, ok, err := d.queue.Claim(ctx, d.now())
+	job, ok, err := d.queue.Claim(ctx, d.now(), d.allowedClasses())
 	if err != nil || !ok {
 		return false, err
 	}
