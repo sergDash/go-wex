@@ -20,7 +20,7 @@ func write(t *testing.T, body string) string {
 // TestLoad — корректный файл читается целиком.
 func TestLoadHTTPAPI(t *testing.T) {
 	path := write(t, `{
-		"server": {"addr": "127.0.0.1:9000"},
+		"server": {"addr": "127.0.0.1:9000", "open": true},
 		"interface": {"dir": "interface"},
 		"store": {"path": "data/store.json"}
 	}`)
@@ -31,6 +31,9 @@ func TestLoadHTTPAPI(t *testing.T) {
 	}
 	if c.Server.Addr != "127.0.0.1:9000" {
 		t.Fatalf("адрес: %q", c.Server.Addr)
+	}
+	if !c.Server.Open {
+		t.Fatal("открытие браузера не прочиталось")
 	}
 	if c.Interface.Dir != "interface" {
 		t.Fatalf("каталог: %q", c.Interface.Dir)

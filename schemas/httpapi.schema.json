@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-4.schema.json",
+  "$id": "https://go-wex.local/httpapi-5.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
@@ -15,6 +15,11 @@
           "type": "string",
           "minLength": 1,
           "description": "адрес HTTP-службы, например 127.0.0.1:4480"
+        },
+        "open": {
+          "type": "boolean",
+          "default": false,
+          "description": "открыть страницу в браузере после запуска; в образце включено"
         }
       }
     },

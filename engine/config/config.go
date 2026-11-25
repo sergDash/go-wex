@@ -29,9 +29,12 @@ type HTTPAPI struct {
 	Journal   *Journal  `json:"journal"`
 }
 
-// Server — настройки адреса HTTP-службы.
+// Server — настройки адреса HTTP-службы. Open — открыть страницу
+// в браузере после запуска: удобно при разработке, на сервере без рабочего
+// стола выключается.
 type Server struct {
 	Addr string `json:"addr"`
+	Open bool   `json:"open"`
 }
 
 // Interface — настройки каталога статики.

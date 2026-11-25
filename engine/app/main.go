@@ -8,9 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -195,12 +198,56 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Страница открывается, когда службы уже подняты: отдельная горутина
+	// ждёт порт, чтобы браузер не показал отказ соединения.
+	if cfg.Server.Open {
+		go openBrowser(ctx, cfg.Server.Addr)
+	}
+
 	log.Printf("go+wex: http://%s", cfg.Server.Addr)
 	if err := group.Run(ctx); err != nil {
 		log.Printf("остановка: %v", err)
 		return 1
 	}
 	return 0
+}
+
+// openBrowser открывает страницу, дождавшись, что служба заняла адрес.
+// Запуск служб идёт после вызова, поэтому простой запуск браузера сразу
+// приводил бы к отказу соединения.
+func openBrowser(ctx context.Context, addr string) {
+	url := "http://" + addr + "/"
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Printf("браузер: служба %s не заняла адрес за 5 с", addr)
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	if err := exec.Command(browserCommand(), url).Run(); err != nil {
+		log.Printf("браузер: %s: %v", url, err)
+	}
+}
+
+// browserCommand — чем открыть страницу: xdg-open в Linux, open в macOS.
+func browserCommand() string {
+	if runtime.GOOS == "darwin" {
+		return "open"
+	}
+	return "xdg-open"
 }
 
 // moduleList — единственное место, где приложение знает о модулях.

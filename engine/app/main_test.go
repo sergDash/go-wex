@@ -17,6 +17,25 @@ import (
 	"go-wex/engine/schedule"
 )
 
+// TestOpenBrowserStopsOnCancel — открытие страницы не ждёт порт, если
+// процесс останавливают: горутина завершается по отмене контекста.
+func TestOpenBrowserStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		openBrowser(ctx, "127.0.0.1:1")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("открытие не остановилось по отмене контекста")
+	}
+}
+
 // fakeService — служба для проверки сбора: ничего не делает.
 type fakeService struct{}
 
