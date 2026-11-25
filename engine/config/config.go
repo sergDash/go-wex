@@ -26,6 +26,7 @@ type HTTPAPI struct {
 	Interface Interface `json:"interface"`
 	Store     Store     `json:"store"`
 	Schedule  Schedule  `json:"schedule"`
+	Modules   Modules   `json:"modules"`
 	Journal   *Journal  `json:"journal"`
 }
 
@@ -57,6 +58,13 @@ type Schedule struct {
 type ScheduleRule struct {
 	After string `json:"after"`
 	Class string `json:"class"`
+}
+
+// Modules — какие модули включать. Список Disabled перечисляет выключенные;
+// пустой список означает, что работают все. Выключенный модуль не объявляет
+// ничего: ни маршрутов, ни работ, ни событий, ни служб.
+type Modules struct {
+	Disabled []string `json:"disabled"`
 }
 
 // Journal — настройки журнала работы. Отсутствие раздела отключает журнал:

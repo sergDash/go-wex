@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -179,7 +180,16 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		return serviceNames(services)
 	}
 
-	for _, m := range moduleList(disp, jw, running) {
+	modules, err := selectModules(moduleList(disp, jw, running), cfg.Modules.Disabled)
+	if err != nil {
+		log.Printf("настройки: %v", err)
+		return 1
+	}
+
+	for _, name := range cfg.Modules.Disabled {
+		log.Printf("модуль %s: выключен настройкой", name)
+	}
+	for _, m := range modules {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
 			return 1
@@ -266,6 +276,42 @@ func browserCommand() string {
 		return "open"
 	}
 	return "xdg-open"
+}
+
+func selectModules(all []core.Module, disabled []string) ([]core.Module, error) {
+	if len(disabled) == 0 {
+		return all, nil
+	}
+
+	known := make(map[string]bool, len(all))
+	for _, m := range all {
+		known[m.Name()] = true
+	}
+	for _, name := range disabled {
+		if !known[name] {
+			return nil, fmt.Errorf("модуль %q не объявлен; известны: %s", name, strings.Join(moduleNames(all), ", "))
+		}
+		delete(known, name)
+	}
+
+	out := make([]core.Module, 0, len(all))
+	for _, m := range all {
+		if known[m.Name()] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// moduleNames — имена модулей по возрастанию: для сообщения об опечатке
+// и для порядка в журнале.
+func moduleNames(modules []core.Module) []string {
+	names := make([]string, 0, len(modules))
+	for _, m := range modules {
+		names = append(names, m.Name())
+	}
+	sort.Strings(names)
+	return names
 }
 
 // moduleList — единственное место, где приложение знает о модулях.

@@ -22,7 +22,8 @@ func TestLoadHTTPAPI(t *testing.T) {
 	path := write(t, `{
 		"server": {"addr": "127.0.0.1:9000", "open": true},
 		"interface": {"dir": "interface"},
-		"store": {"path": "data/store.json"}
+		"store": {"path": "data/store.json"},
+		"modules": {"disabled": ["demo"]}
 	}`)
 
 	c, err := LoadHTTPAPI(path)
@@ -34,6 +35,9 @@ func TestLoadHTTPAPI(t *testing.T) {
 	}
 	if !c.Server.Open {
 		t.Fatal("открытие браузера не прочиталось")
+	}
+	if len(c.Modules.Disabled) != 1 || c.Modules.Disabled[0] != "demo" {
+		t.Fatalf("выключенные модули: %v", c.Modules.Disabled)
 	}
 	if c.Interface.Dir != "interface" {
 		t.Fatalf("каталог: %q", c.Interface.Dir)

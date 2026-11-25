@@ -15,6 +15,9 @@
       {"after": "10s", "class": "background"}
     ]
   },
+  "modules": {
+    "disabled": []
+  },
   "journal": {
     "path": "data/journal.log",
     "maxSize": 1048576,

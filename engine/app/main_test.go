@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"go-wex/engine/activity"
 	"go-wex/engine/clock"
 	"go-wex/engine/config"
+	"go-wex/engine/core"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
 	"go-wex/engine/process"
@@ -24,6 +26,39 @@ type namedService struct{ name string }
 func (s namedService) Name() string              { return s.name }
 func (namedService) Start(context.Context) error { return nil }
 func (namedService) Stop(context.Context) error  { return nil }
+
+// namedModule — модуль с заданным именем: для проверки отбора модулей.
+type namedModule struct{ name string }
+
+func (m namedModule) Name() string               { return m.name }
+func (namedModule) Register(core.Registry) error { return nil }
+
+// TestSelectModules — выключенные модули убираются, порядок остальных
+// сохраняется, а неизвестное имя даёт ошибку с перечнем известных.
+func TestSelectModules(t *testing.T) {
+	all := []core.Module{namedModule{"health"}, namedModule{"tasks"}, namedModule{"demo"}}
+
+	got, err := selectModules(all, nil)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("без отключений: %d модулей, ошибка %v", len(got), err)
+	}
+
+	got, err = selectModules(all, []string{"demo"})
+	if err != nil {
+		t.Fatalf("отключение demo: %v", err)
+	}
+	if len(got) != 2 || got[0].Name() != "health" || got[1].Name() != "tasks" {
+		t.Fatalf("после отключения: %v", moduleNames(got))
+	}
+
+	_, err = selectModules(all, []string{"dmeo"})
+	if err == nil {
+		t.Fatal("опечатка в имени модуля принята")
+	}
+	if !strings.Contains(err.Error(), "health") {
+		t.Fatalf("ошибка без перечня известных модулей: %v", err)
+	}
+}
 
 // TestServiceNames — службы перечисляются в порядке запуска: страница
 // показывает состав приложения в том виде, в каком его собрал движок.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-5.schema.json",
+  "$id": "https://go-wex.local/httpapi-6.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
@@ -71,6 +71,21 @@
               }
             }
           }
+        }
+      }
+    },
+    "modules": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "какие модули включать; выключенный модуль не объявляет ничего",
+      "properties": {
+        "disabled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "имена выключенных модулей; неизвестное имя — ошибка"
         }
       }
     },
