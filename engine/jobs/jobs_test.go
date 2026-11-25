@@ -14,16 +14,62 @@ import (
 // allClasses — набор, при котором разборщик берёт любую работу.
 var allClasses = []Class{ClassInteractive, ClassBackground}
 
+// testNow — момент постановки в проверках очереди: время создания
+// сравнивается точно, без обращения к системным часам.
+var testNow = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+
+// TestTimesOnEnqueueClaimAndRetry — при постановке записывается время
+// создания, при захвате — время начала, а возврат в очередь его очищает:
+// работа снова ждёт, и прошлая попытка остаётся только в журнале.
+func TestTimesOnEnqueueClaimAndRetry(t *testing.T) {
+	q := NewMemoryQueue()
+	ctx := context.Background()
+	created := testNow
+	started := created.Add(3 * time.Second)
+
+	id, err := q.Enqueue(ctx, created, "ok", nil, ClassBackground)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	job, status, ok, err := q.Get(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("Get: ok=%v err=%v", ok, err)
+	}
+	if status != StatusQueued || !job.CreatedAt.Equal(created) || !job.StartedAt.IsZero() {
+		t.Fatalf("после постановки: status=%q created=%s started=%s", status, job.CreatedAt, job.StartedAt)
+	}
+
+	job, ok, err = q.Claim(ctx, started, allClasses)
+	if err != nil || !ok {
+		t.Fatalf("Claim: ok=%v err=%v", ok, err)
+	}
+	if !job.StartedAt.Equal(started) || !job.CreatedAt.Equal(created) {
+		t.Fatalf("после захвата: created=%s started=%s", job.CreatedAt, job.StartedAt)
+	}
+
+	if err := q.Retry(ctx, id, started.Add(time.Minute)); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	job, status, _, err = q.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get после Retry: %v", err)
+	}
+	if status != StatusQueued || !job.StartedAt.IsZero() || !job.CreatedAt.Equal(created) {
+		t.Fatalf("после возврата: status=%q created=%s started=%s", status, job.CreatedAt, job.StartedAt)
+	}
+}
+
 // TestMemoryQueueOrder — работы забираются по сроку, при равенстве по номеру.
 func TestMemoryQueueOrder(t *testing.T) {
 	q := NewMemoryQueue()
 	ctx := context.Background()
 
-	first, err := q.Enqueue(ctx, "a", map[string]int{"n": 1}, ClassBackground)
+	first, err := q.Enqueue(ctx, testNow, "a", map[string]int{"n": 1}, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	second, err := q.Enqueue(ctx, "b", map[string]int{"n": 2}, ClassBackground)
+	second, err := q.Enqueue(ctx, testNow, "b", map[string]int{"n": 2}, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -58,11 +104,11 @@ func TestClaimClassOrder(t *testing.T) {
 	q := NewMemoryQueue()
 	ctx := context.Background()
 
-	background, err := q.Enqueue(ctx, "bg", nil, ClassBackground)
+	background, err := q.Enqueue(ctx, testNow, "bg", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	interactive, err := q.Enqueue(ctx, "fg", nil, ClassInteractive)
+	interactive, err := q.Enqueue(ctx, testNow, "fg", nil, ClassInteractive)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -90,11 +136,11 @@ func TestClaimAllowedClasses(t *testing.T) {
 	q := NewMemoryQueue()
 	ctx := context.Background()
 
-	background, err := q.Enqueue(ctx, "bg", nil, ClassBackground)
+	background, err := q.Enqueue(ctx, testNow, "bg", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	interactive, err := q.Enqueue(ctx, "fg", nil, ClassInteractive)
+	interactive, err := q.Enqueue(ctx, testNow, "fg", nil, ClassInteractive)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -447,7 +493,7 @@ func TestStoreQueueEnqueuePersists(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	id, err := q.Enqueue(ctx, "ok", map[string]int{"n": 1}, ClassBackground)
+	id, err := q.Enqueue(ctx, testNow, "ok", map[string]int{"n": 1}, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -463,6 +509,9 @@ func TestStoreQueueEnqueuePersists(t *testing.T) {
 	if string(job.Payload) != `{"n":1}` {
 		t.Fatalf("тело: %s", job.Payload)
 	}
+	if !job.CreatedAt.Equal(testNow) {
+		t.Fatalf("время создания после перезапуска: %s", job.CreatedAt)
+	}
 }
 
 // TestStoreQueueRunningRecovers — работа, прерванная падением в running,
@@ -472,7 +521,7 @@ func TestStoreQueueRunningRecovers(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	id, err := q.Enqueue(ctx, "ok", nil, ClassBackground)
+	id, err := q.Enqueue(ctx, testNow, "ok", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -505,15 +554,15 @@ func TestStoreQueueSeqContinues(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	if _, err := q.Enqueue(ctx, "ok", nil, ClassBackground); err != nil {
+	if _, err := q.Enqueue(ctx, testNow, "ok", nil, ClassBackground); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, err := q.Enqueue(ctx, "ok", nil, ClassBackground); err != nil {
+	if _, err := q.Enqueue(ctx, testNow, "ok", nil, ClassBackground); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
 	q2 := openStoreQueue(t, path)
-	id, err := q2.Enqueue(ctx, "ok", nil, ClassBackground)
+	id, err := q2.Enqueue(ctx, testNow, "ok", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue после перезапуска: %v", err)
 	}
@@ -529,7 +578,7 @@ func TestStoreQueueStatusPersists(t *testing.T) {
 	ctx := context.Background()
 
 	q := openStoreQueue(t, path)
-	id, err := q.Enqueue(ctx, "ok", nil, ClassBackground)
+	id, err := q.Enqueue(ctx, testNow, "ok", nil, ClassBackground)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

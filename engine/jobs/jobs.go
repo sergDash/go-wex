@@ -37,7 +37,9 @@ func (c Class) Valid() bool {
 }
 
 // Job — работа в очереди. Attempts считается при захвате, поэтому обработчик
-// видит номер текущей попытки. Теги JSON — форма записи в хранилище.
+// видит номер текущей попытки. CreatedAt — момент постановки, StartedAt —
+// начало последней попытки; у работы в очереди время начала пустое.
+// Теги JSON — форма записи в хранилище.
 type Job struct {
 	ID          string          `json:"id"`
 	Kind        Kind            `json:"kind"`
@@ -45,6 +47,8 @@ type Job struct {
 	Payload     json.RawMessage `json:"payload"`
 	Attempts    int             `json:"attempts"`
 	AvailableAt time.Time       `json:"availableAt"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	StartedAt   time.Time       `json:"startedAt"`
 }
 
 // Handler — обработчик работы. Ошибка означает, что работу нужно повторить
@@ -53,8 +57,11 @@ type Handler func(context.Context, Job) error
 
 // Queue — хранилище работ. Реализация в памяти годится для образца; долговечная
 // очередь реализует тот же набор методов поверх хранилища.
+//
+// Время приходит аргументом, а не берётся внутри: момент постановки —
+// такое же данное, как вид и тело, и в проверках он задаётся точно.
 type Queue interface {
-	Enqueue(ctx context.Context, kind Kind, payload any, class Class) (string, error)
+	Enqueue(ctx context.Context, now time.Time, kind Kind, payload any, class Class) (string, error)
 	Claim(ctx context.Context, now time.Time, allowed []Class) (Job, bool, error)
 	Done(ctx context.Context, id string) error
 	Retry(ctx context.Context, id string, at time.Time) error
@@ -181,6 +188,9 @@ func OpenStoreQueue(s *store.Store) (Queue, error) {
 		if it.Status == StatusRunning {
 			it.Status = StatusQueued
 			it.Job.AvailableAt = time.Time{}
+			// Прерванная работа ещё не начиналась заново: время начала
+			// прошлой попытки осталось в журнале, а не в строке очереди.
+			it.Job.StartedAt = time.Time{}
 			changed = true
 		}
 	}
@@ -192,8 +202,9 @@ func OpenStoreQueue(s *store.Store) (Queue, error) {
 	return q, nil
 }
 
-// Enqueue кладёт работу со статусом queued и возвращает её номер.
-func (q *queue) Enqueue(_ context.Context, kind Kind, payload any, class Class) (string, error) {
+// Enqueue кладёт работу со статусом queued и возвращает её номер. Момент
+// постановки записывается в работу: по нему видно, сколько она прождала.
+func (q *queue) Enqueue(_ context.Context, now time.Time, kind Kind, payload any, class Class) (string, error) {
 	if class == "" {
 		class = ClassBackground
 	}
@@ -210,7 +221,16 @@ func (q *queue) Enqueue(_ context.Context, kind Kind, payload any, class Class) 
 	defer q.mu.Unlock()
 	q.seq++
 	id := fmt.Sprintf("%06d", q.seq)
-	q.items[id] = &item{Job: Job{ID: id, Kind: kind, Class: class, Payload: raw}, Status: StatusQueued}
+	q.items[id] = &item{
+		Job: Job{
+			ID:        id,
+			Kind:      kind,
+			Class:     class,
+			Payload:   raw,
+			CreatedAt: now,
+		},
+		Status: StatusQueued,
+	}
 	if err := q.persist(); err != nil {
 		delete(q.items, id)
 		q.seq--
@@ -242,8 +262,10 @@ func (q *queue) Claim(_ context.Context, now time.Time, allowed []Class) (Job, b
 
 	chosen.Status = StatusRunning
 	chosen.Job.Attempts++
+	chosen.Job.StartedAt = now
 	if err := q.persist(); err != nil {
 		chosen.Job.Attempts--
+		chosen.Job.StartedAt = time.Time{}
 		chosen.Status = StatusQueued
 		return Job{}, false, err
 	}
@@ -301,7 +323,8 @@ func (q *queue) Fail(_ context.Context, id string) error {
 
 // setStatus меняет статус работы; отсутствие работы — ошибка. Сбой записи
 // возвращает строку к прежнему состоянию, чтобы память не расходилась
-// с файлом.
+// с файлом. Возврат в очередь очищает время начала: работа снова ждёт,
+// и прошлая попытка остаётся только в журнале.
 func (q *queue) setStatus(id, status string, at time.Time) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -309,12 +332,16 @@ func (q *queue) setStatus(id, status string, at time.Time) error {
 	if !ok {
 		return fmt.Errorf("jobs: работа %q не найдена", id)
 	}
-	prevStatus, prevAt := it.Status, it.Job.AvailableAt
+	prevStatus, prevAt, prevStarted := it.Status, it.Job.AvailableAt, it.Job.StartedAt
 	it.Status = status
 	it.Job.AvailableAt = at
+	if status == StatusQueued {
+		it.Job.StartedAt = time.Time{}
+	}
 	if err := q.persist(); err != nil {
 		it.Status = prevStatus
 		it.Job.AvailableAt = prevAt
+		it.Job.StartedAt = prevStarted
 		return err
 	}
 	return nil
@@ -458,7 +485,7 @@ func (d *Dispatcher) Enqueue(ctx context.Context, kind Kind, payload any, class 
 		return "", fmt.Errorf("jobs: неизвестный класс %q", class)
 	}
 
-	id, err := d.queue.Enqueue(ctx, kind, payload, class)
+	id, err := d.queue.Enqueue(ctx, d.clock.Now(), kind, payload, class)
 	if err != nil {
 		return "", err
 	}

@@ -135,12 +135,41 @@ type tick struct {
 	Due string `json:"due"`
 }
 
-// jobView — состояние работы для клиента.
+// jobView — состояние работы для клиента. Пустое время начала отдаётся
+// как null: работа в очереди ещё не начиналась.
 type jobView struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Text     string `json:"text"`
-	Attempts int    `json:"attempts"`
+	ID        string     `json:"id"`
+	Status    string     `json:"status"`
+	Text      string     `json:"text"`
+	Attempts  int        `json:"attempts"`
+	CreatedAt *time.Time `json:"createdAt"`
+	StartedAt *time.Time `json:"startedAt"`
+}
+
+// moment — момент для ответа: nil, если он не наступил, чтобы клиент
+// отличал «ещё не начиналось» от нулевого времени.
+func moment(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// view — состояние работы для клиента: тело разбирается в задачу, времена
+// берутся из строки очереди.
+func view(job jobs.Job, status string) (jobView, error) {
+	var in task
+	if err := json.Unmarshal(job.Payload, &in); err != nil {
+		return jobView{}, fmt.Errorf("тело работы %s: %w", job.ID, err)
+	}
+	return jobView{
+		ID:        job.ID,
+		Status:    status,
+		Text:      in.Text,
+		Attempts:  job.Attempts,
+		CreatedAt: moment(job.CreatedAt),
+		StartedAt: moment(job.StartedAt),
+	}, nil
 }
 
 func (m *module) snapshot(*http.Request) (any, error) {
@@ -170,7 +199,17 @@ func (m *module) enqueue(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return jobView{ID: id, Status: jobs.StatusQueued, Text: in.Text}, nil
+
+	// Постановка отдаёт только номер, поэтому работу читаем из очереди:
+	// так в ответ попадает время создания, которое проставила очередь.
+	job, status, ok, err := m.disp.Get(r.Context(), id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("demo: работа %s пропала после постановки", id)
+	}
+	return view(job, status)
 }
 
 func (m *module) status(r *http.Request) (any, error) {
@@ -182,12 +221,7 @@ func (m *module) status(r *http.Request) (any, error) {
 	if !ok {
 		return nil, &core.Error{Status: http.StatusNotFound, Message: fmt.Sprintf("работа %s не найдена", id)}
 	}
-
-	var in task
-	if err := json.Unmarshal(job.Payload, &in); err != nil {
-		return nil, fmt.Errorf("тело работы %s: %w", id, err)
-	}
-	return jobView{ID: job.ID, Status: status, Text: in.Text, Attempts: job.Attempts}, nil
+	return view(job, status)
 }
 
 // echoTCP отвечает на каждую строку и считает принятые строки.

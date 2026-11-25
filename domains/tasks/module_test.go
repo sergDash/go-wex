@@ -58,6 +58,7 @@ func newDispatcher(t *testing.T, m module) *jobs.Dispatcher {
 
 	reg := jobs.NewRegistry()
 	if err := reg.Add(kind, jobs.Spec{
+		Class:       jobs.ClassInteractive,
 		Handler:     m.run,
 		MaxAttempts: 3,
 		Backoff:     time.Second,

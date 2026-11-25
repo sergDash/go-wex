@@ -60,27 +60,47 @@ type task struct {
 	DelayMS   int        `json:"delayMs"`
 }
 
-// taskView — то, что видит клиент: номер, класс, статус, текст и попытка.
+// taskView — то, что видит клиент: номер, класс, статус, текст, попытка
+// и времена. Пустое время начала отдаётся как null.
 type taskView struct {
-	ID       string     `json:"id"`
-	Class    jobs.Class `json:"class"`
-	Status   string     `json:"status"`
-	Text     string     `json:"text"`
-	Attempts int        `json:"attempts"`
+	ID        string     `json:"id"`
+	Class     jobs.Class `json:"class"`
+	Status    string     `json:"status"`
+	Text      string     `json:"text"`
+	Attempts  int        `json:"attempts"`
+	CreatedAt *time.Time `json:"createdAt"`
+	StartedAt *time.Time `json:"startedAt"`
+}
+
+// moment — момент для ответа: nil, если он не наступил.
+func moment(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// view — состояние задачи для клиента: тело разбирается в задачу, времена
+// берутся из строки очереди.
+func view(job jobs.Job, status string) (taskView, error) {
+	var in task
+	if err := json.Unmarshal(job.Payload, &in); err != nil {
+		return taskView{}, fmt.Errorf("тело задачи %s: %w", job.ID, err)
+	}
+	return taskView{
+		ID:        job.ID,
+		Class:     job.Class,
+		Status:    status,
+		Text:      in.Text,
+		Attempts:  job.Attempts,
+		CreatedAt: moment(job.CreatedAt),
+		StartedAt: moment(job.StartedAt),
+	}, nil
 }
 
 // pauseView — состояние паузы разборщика.
 type pauseView struct {
 	Paused bool `json:"paused"`
-}
-
-// classOr — класс, который получит работа: пустой означает интерактивный,
-// заданный правилом вида.
-func classOr(c jobs.Class) jobs.Class {
-	if c == "" {
-		return jobs.ClassInteractive
-	}
-	return c
 }
 
 // enqueue принимает задачу и сразу отдаёт номер. Выполнение начинается
@@ -104,7 +124,17 @@ func (m module) enqueue(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return taskView{ID: id, Class: classOr(in.Class), Status: jobs.StatusQueued, Text: in.Text}, nil
+
+	// Постановка отдаёт только номер, поэтому задачу читаем из очереди:
+	// так в ответ попадают класс и время создания, которые проставила очередь.
+	job, status, ok, err := m.disp.Get(r.Context(), id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("задача %s пропала после постановки", id)
+	}
+	return view(job, status)
 }
 
 // status отдаёт работу и её статус по номеру. Очередь лежит в хранилище,
@@ -118,12 +148,7 @@ func (m module) status(r *http.Request) (any, error) {
 	if !ok {
 		return nil, &core.Error{Status: http.StatusNotFound, Message: fmt.Sprintf("задача %s не найдена", id)}
 	}
-
-	var in task
-	if err := json.Unmarshal(job.Payload, &in); err != nil {
-		return nil, fmt.Errorf("тело задачи %s: %w", id, err)
-	}
-	return taskView{ID: job.ID, Class: job.Class, Status: status, Text: in.Text, Attempts: job.Attempts}, nil
+	return view(job, status)
 }
 
 // pause останавливает захват новых работ: начатая доигрывается.
