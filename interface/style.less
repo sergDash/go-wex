@@ -176,16 +176,103 @@ body {
         width: 110px;
     }
 
-    // Выбор режима удаления: шире периода, текст режима длинный.
-    .mode {
+    // Выпадающий список: поле с текущим значением и окно пунктов. Сделан
+    // из своих элементов: браузерный select нельзя одинаково оформить
+    // и связать со стейтом страницы.
+    .select {
+        position: relative;
         flex: none;
-        width: 300px;
+
+        .selected {
+            .row(8px);
+
+            justify-content: space-between;
+            padding: 8px 10px;
+            border: 1px solid @border;
+            border-radius: 8px;
+            background: @bg;
+            color: @text;
+            cursor: pointer;
+            user-select: none;
+
+            .value {
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+            }
+
+            .caret {
+                flex: none;
+                color: @text-muted;
+            }
+
+            &:hover {
+                border-color: @accent;
+            }
+        }
+
+        .options {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            z-index: 3;
+            width: 100%;
+            max-height: 240px;
+            margin-top: 4px;
+            overflow: auto;
+            border: 1px solid @border;
+            border-radius: 8px;
+            background: @surface;
+            scrollbar-width: thin;
+            scrollbar-color: @border transparent;
+
+            .option {
+                padding: 6px 10px;
+                cursor: pointer;
+                white-space: nowrap;
+
+                &:hover {
+                    background: fade(@accent, 10%);
+                }
+
+                &.picked {
+                    color: @accent;
+                }
+            }
+
+            .search {
+                padding: 6px;
+
+                .input {
+                    width: 100%;
+                }
+            }
+        }
     }
 
-    // Выбор события для удаления: номер короткий.
+    // Строка удаления: отступ от таблицы и ширина по всей панели,
+    // кнопка прижата к правому краю.
+    .deletebar {
+        .row(12px);
+
+        margin-top: 12px;
+
+        .button {
+            margin-left: auto;
+        }
+    }
+
+    // Ширины списков в конкретных местах.
+    .mode {
+        width: 320px;
+    }
+
     .pick {
-        flex: none;
         width: 190px;
+    }
+
+    .demo {
+        width: 240px;
     }
 
     .button {

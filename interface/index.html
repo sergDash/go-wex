@@ -191,20 +191,91 @@
                         </tr>
                     </tbody>
                 </table>
-                <div class="line" w-if="deletable.length">
+                <div class="deletebar" w-if="deletable.length">
                     <span class="hint">Удалить:</span>
-                    <select class="input mode" w-bind="deleteMode">
-                        <option value="event">только событие</option>
-                        <option value="event-and-jobs">вместе с работами (пока не сделано)</option>
-                    </select>
-                    <select class="input pick" w-bind="deleteId">
-                        <option value="">— событие —</option>
-                        <option w-for="row in deletable traceby row.id"
-                                value="{{ row.id }}">{{ row.id }}</option>
-                    </select>
-                    <button class="button" w-on="click:deleteEvent" w-disabled="!deleteId">Удалить</button>
+                    <div class="select mode" w-class="{ 'open': selects.deleteMode.open }">
+                        <div class="selected" data-select="deleteMode" w-on="click:toggleSelect">
+                            <span class="value">{{ selects.deleteMode.label }}</span>
+                            <span class="caret">▾</span>
+                        </div>
+                        <div class="options" w-if="selects.deleteMode.open">
+                            <div class="option" data-select="deleteMode" data-value="event"
+                                 w-on="click:pickSelect">только событие</div>
+                            <div class="option" data-select="deleteMode" data-value="event-and-jobs"
+                                 w-on="click:pickSelect">вместе с работами (пока не сделано)</div>
+                        </div>
+                    </div>
+                    <div class="select pick" w-class="{ 'open': selects.deleteId.open }">
+                        <div class="selected" data-select="deleteId" w-on="click:toggleSelect">
+                            <span class="value">{{ selects.deleteId.label }}</span>
+                            <span class="caret">▾</span>
+                        </div>
+                        <div class="options" w-if="selects.deleteId.open">
+                            <div class="option" w-for="row in deletable traceby row.id"
+                                 data-select="deleteId" data-value="{{ row.id }}"
+                                 w-on="click:pickSelect">{{ row.id }}</div>
+                        </div>
+                    </div>
+                    <button class="button" w-on="click:deleteEvent"
+                            w-disabled="!selects.deleteId.value">Удалить</button>
                 </div>
                 <p class="note" w-if="!events.length">Событий нет.</p>
+            </section>
+
+            <section class="block">
+                <h2 class="caption">
+                    Селекторы
+                    <span class="engine">interface</span>
+                </h2>
+                <p class="note">
+                    Выпадающие списки сделаны из своих элементов, а не из
+                    браузерного <code>select</code>: так они выглядят одинаково
+                    и управляются тем же стейтом, что и остальная страница.
+                    Данные лежат локально — выбор никуда не отправляется.
+                </p>
+
+                <p class="label">Простой выбор</p>
+                <div class="select demo" w-class="{ 'open': selects.color.open }">
+                    <div class="selected" data-select="color" w-on="click:toggleSelect">
+                        <span class="value">{{ selects.color.label }}</span>
+                        <span class="caret">▾</span>
+                    </div>
+                    <div class="options" w-if="selects.color.open">
+                        <div class="option" w-for="item in colors traceby item"
+                             data-select="color" data-value="{{ item }}"
+                             w-on="click:pickSelect">{{ item }}</div>
+                    </div>
+                </div>
+
+                <p class="label">Выбор с поиском</p>
+                <div class="select demo" w-class="{ 'open': selects.city.open }">
+                    <div class="selected" data-select="city" w-on="click:toggleSelect">
+                        <span class="value">{{ selects.city.label }}</span>
+                        <span class="caret">▾</span>
+                    </div>
+                    <div class="options" w-if="selects.city.open">
+                        <div class="search">
+                            <input class="input" w-on="input:filterCities" placeholder="поиск">
+                        </div>
+                        <div class="option" w-for="item in cityMatches traceby item"
+                             data-select="city" data-value="{{ item }}"
+                             w-on="click:pickSelect">{{ item }}</div>
+                    </div>
+                </div>
+
+                <p class="label">Множественный выбор</p>
+                <div class="select demo" w-class="{ 'open': selects.tags.open }">
+                    <div class="selected" data-select="tags" w-on="click:toggleSelect">
+                        <span class="value">{{ selects.tags.value.join(', ') || '— не выбрано —' }}</span>
+                        <span class="caret">▾</span>
+                    </div>
+                    <div class="options" w-if="selects.tags.open">
+                        <div class="option" w-for="item in tags traceby item"
+                             w-class="{ 'picked': selects.tags.value.includes(item) }"
+                             data-select="tags" data-value="{{ item }}"
+                             w-on="click:pickSelect">{{ item }}</div>
+                    </div>
+                </div>
             </section>
 
             <footer class="actions">

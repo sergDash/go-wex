@@ -24,8 +24,17 @@ $(function () {
         deletable: [],
         eventText: 'напоминание',
         eventSeconds: 10,
-        deleteMode: 'event',
-        deleteId: '',
+        selects: {
+            deleteMode: { open: false, value: 'event', label: 'только событие' },
+            deleteId: { open: false, value: '', label: '— событие —' },
+            color: { open: false, value: 'зелёный', label: 'зелёный' },
+            city: { open: false, value: '', label: '— город —' },
+            tags: { open: false, value: [] }
+        },
+        colors: ['красный', 'зелёный', 'синий', 'жёлтый'],
+        cities: ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'],
+        cityMatches: ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'],
+        tags: ['гость', 'подписчик', 'автор', 'редактор'],
         text: 'раз',
         failure: ''
     });
@@ -211,24 +220,88 @@ $(function () {
 
     // deleteEvent убирает выбранное событие выбранным способом. По умолчанию
     // исчезает только событие; работы, которые оно поставило, остаются
-    // в очереди. Аргумент берётся из стейта: w-on не передаёт параметров,
-    // обработчик получает только событие DOM.
+    // в очереди. Выбор лежит в стейте, а не приходит аргументом: w-on
+    // не передаёт параметров.
     view.method('deleteEvent', function (state) {
         return function () {
-            if (!state.deleteId) {
+            var id = state.selects.deleteId.value;
+            if (!id) {
                 return;
             }
+            var mode = state.selects.deleteMode.value;
 
-            call('/api/events/' + encodeURIComponent(state.deleteId) + '?mode=' + encodeURIComponent(state.deleteMode), {
+            call('/api/events/' + encodeURIComponent(id) + '?mode=' + encodeURIComponent(mode), {
                 method: 'DELETE'
             })
                 .then(function () {
-                    state.deleteId = '';
+                    state.selects.deleteId.value = '';
+                    state.selects.deleteId.label = '— событие —';
                     return loadEvents(state);
                 })
                 .catch(function (error) {
                     state.failure = error.message;
                 });
+        };
+    });
+
+    // filterCities отбирает города по введённой строке. Значение читается
+    // из самого поля: вместе с w-bind это дало бы гонку, а так список
+    // пересобирается в том же обработчике, где получен ввод.
+    view.method('filterCities', function (state) {
+        return function (event) {
+            var query = event.currentTarget.value.trim().toLowerCase();
+            var matches = [];
+
+            for (var i = 0; i < state.cities.length; i++) {
+                if (state.cities[i].toLowerCase().indexOf(query) >= 0) {
+                    matches.push(state.cities[i]);
+                }
+            }
+            state.cityMatches = matches;
+        };
+    });
+
+    // toggleSelect открывает выпадающий список и закрывает остальные:
+    // одновременно открытым может быть только один.
+    view.method('toggleSelect', function (state) {
+        return function (event) {
+            var name = event.currentTarget.dataset.select;
+            var open = state.selects[name].open;
+
+            for (var key in state.selects) {
+                state.selects[key].open = false;
+            }
+            state.selects[name].open = !open;
+        };
+    });
+
+    // pickSelect записывает выбор. Значение и подпись берутся из data-атрибутов
+    // пункта: w-on не передаёт аргументов, обработчик получает только событие.
+    // Множественный выбор не закрывает список и переключает пункт.
+    view.method('pickSelect', function (state) {
+        return function (event) {
+            var item = event.currentTarget;
+            var name = item.dataset.select;
+            var value = item.dataset.value;
+            var select = state.selects[name];
+
+            if (name === 'tags') {
+                var index = select.value.indexOf(value);
+
+                if (index >= 0) {
+                    select.value.splice(index, 1);
+                } else {
+                    select.value.push(value);
+                }
+                // Массив меняется на месте: прокси не видит замену элементов,
+                // поэтому перерисовку просим явно.
+                this.update();
+                return;
+            }
+
+            select.value = value;
+            select.label = item.textContent.trim();
+            select.open = false;
         };
     });
 
