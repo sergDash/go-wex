@@ -1,6 +1,6 @@
 // Поток данных страницы.
 //
-// 1. Стейт создаётся синхронно: связь не проверена, снимок пуст.
+// 1. Стейт создаётся синхронно: связь не проверена, снимок пуст, очередь пуста.
 // 2. mount() вставляет шаблон #app в DOM и подписывает его на стейт.
 // 3. call() — единственное место разбора конверта: сначала error, затем
 //    result, как в Go сначала проверяют err, а потом берут значение.
@@ -18,7 +18,7 @@ $(function () {
             lines: 0,
             event: { kind: '', period: '', fired: 0 }
         },
-        job: null,
+        jobs: [],
         text: 'раз',
         failure: ''
     });
@@ -40,49 +40,70 @@ $(function () {
             });
     }
 
-    // jobState приводит работу к полям стейта. Имена совпадают с ответом;
-    // время показывается до секунд, а отсутствующее начало объясняется
-    // словами, чтобы в таблице не оставалось пустого места.
-    function jobState(job) {
+    // rowState приводит строку очереди к полям стейта. Имена совпадают
+    // с ответом; время показывается до секунд, а пустое место
+    // в столбце «Начата» — прочерком.
+    function rowState(row) {
         return {
-            id: job.id,
-            status: job.status,
-            text: job.text,
-            attempts: job.attempts,
-            createdAt: momentText(job.createdAt, '—'),
-            startedAt: momentText(job.startedAt, 'ещё не начиналась')
+            id: row.id,
+            kind: row.kind,
+            status: row.status,
+            text: row.text,
+            attempts: row.attempts,
+            createdAt: momentText(row.createdAt, '—'),
+            startedAt: momentText(row.startedAt, '—')
         };
     }
 
     // momentText — момент для показа в местном времени. Сервер отдаёт
-    // полную точность, панели хватает секунд.
+    // полную точность, панели хватает секунд, а год в таблице повторяется
+    // в каждой строке и только отнимает ширину.
     function momentText(value, empty) {
         if (!value) {
             return empty;
         }
-        return new Date(value).toLocaleString('ru-RU');
+        return new Date(value).toLocaleString('ru-RU', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
     }
 
-    // snapshot читает связь и снимок демо одним заходом: оба запроса идут
-    // параллельно, шаблон перерисовывается один раз.
+    // loadJobs перечитывает очередь целиком. Строки идут сверху вниз
+    // в том порядке, который отдал сервер: он ставит новые работы первыми.
+    function loadJobs(state) {
+        return call('/api/demo/jobs')
+            .then(function (rows) {
+                state.jobs = rows.map(rowState);
+                state.failure = '';
+            });
+    }
+
+    // snapshot читает связь, снимок демо и очередь одним заходом: запросы
+    // идут параллельно, шаблон перерисовывается один раз.
     function snapshot(state) {
         state.checking = true;
 
-        Promise.all([call('/api/health'), call('/api/demo')])
+        Promise.all([call('/api/health'), call('/api/demo'), call('/api/demo/jobs')])
             .then(function (values) {
                 const health = values[0];
                 const demo = values[1];
+                const rows = values[2];
 
                 state.checking = false;
                 state.ok = health.ok;
                 state.status = health.status;
                 state.demo = demo;
+                state.jobs = rows.map(rowState);
                 state.failure = '';
             })
             .catch(function (error) {
                 state.checking = false;
                 state.ok = false;
                 state.status = 'сервер не ответил: ' + error.message;
+                state.failure = error.message;
             });
     }
 
@@ -93,8 +114,8 @@ $(function () {
         };
     });
 
-    // enqueue ставит работу и сразу показывает её состояние: ответ уже
-    // содержит номер, статус и времена.
+    // enqueue ставит работу и перечитывает очередь: поставленная строка
+    // появляется сверху вместе со своим статусом и временами.
     view.method('enqueue', function (state) {
         return function () {
             call('/api/demo/jobs', {
@@ -102,9 +123,8 @@ $(function () {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: state.text })
             })
-                .then(function (job) {
-                    state.job = jobState(job);
-                    state.failure = '';
+                .then(function () {
+                    return loadJobs(state);
                 })
                 .catch(function (error) {
                     state.failure = error.message;
@@ -112,22 +132,13 @@ $(function () {
         };
     });
 
-    // refreshJob перечитывает работу по номеру. Пока разборщик её не взял,
-    // время начала пустое; после выполнения оно остаётся.
-    view.method('refreshJob', function (state) {
+    // refreshQueue перечитывает только очередь: снимок демо и связь
+    // при этом не запрашиваются.
+    view.method('refreshQueue', function (state) {
         return function () {
-            if (!state.job) {
-                return;
-            }
-
-            call('/api/demo/jobs/' + state.job.id)
-                .then(function (job) {
-                    state.job = jobState(job);
-                    state.failure = '';
-                })
-                .catch(function (error) {
-                    state.failure = error.message;
-                });
+            loadJobs(state).catch(function (error) {
+                state.failure = error.message;
+            });
         };
     });
 

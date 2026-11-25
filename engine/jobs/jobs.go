@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -55,6 +56,13 @@ type Job struct {
 // или, если попытки кончились, отметить отказом.
 type Handler func(context.Context, Job) error
 
+// Entry — строка очереди для показа снаружи: работа и её статус. Статус
+// хранится рядом с работой, а не внутри неё, поэтому отдаётся отдельным полем.
+type Entry struct {
+	Job    Job
+	Status string
+}
+
 // Queue — хранилище работ. Реализация в памяти годится для образца; долговечная
 // очередь реализует тот же набор методов поверх хранилища.
 //
@@ -67,6 +75,7 @@ type Queue interface {
 	Retry(ctx context.Context, id string, at time.Time) error
 	Fail(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (Job, string, bool, error)
+	List(ctx context.Context) ([]Entry, error)
 }
 
 // Spec — правило вида работы. Class — класс по умолчанию: если при
@@ -304,6 +313,21 @@ func (q *queue) Get(_ context.Context, id string) (Job, string, bool, error) {
 		return Job{}, "", false, nil
 	}
 	return it.Job, it.Status, true, nil
+}
+
+// List отдаёт все строки очереди по возрастанию номера: порядок не зависит
+// от того, как легли записи в карте, поэтому таблица снаружи не прыгает
+// между обновлениями.
+func (q *queue) List(_ context.Context) ([]Entry, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	out := make([]Entry, 0, len(q.items))
+	for _, it := range q.items {
+		out = append(out, Entry{Job: it.Job, Status: it.Status})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Job.ID < out[j].Job.ID })
+	return out, nil
 }
 
 // Done отмечает работу выполненной.
@@ -562,6 +586,12 @@ func (d *Dispatcher) allowedAt(now time.Time) []Class {
 // работы нет.
 func (d *Dispatcher) Get(ctx context.Context, id string) (Job, string, bool, error) {
 	return d.queue.Get(ctx, id)
+}
+
+// List отдаёт все работы очереди по возрастанию номера: по нему строится
+// таблица состояния снаружи.
+func (d *Dispatcher) List(ctx context.Context) ([]Entry, error) {
+	return d.queue.List(ctx)
 }
 
 // Step делает один шаг: забирает работу, выполняет, обновляет статус.

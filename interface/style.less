@@ -153,14 +153,59 @@ body {
         background: @bg;
         color: @text;
         font: inherit;
+        // Системная рамка фокуса вокруг поля выглядит грубо; вместо неё
+        // рамка меняет цвет, чтобы фокус оставался виден.
+        outline: none;
+
+        &:focus {
+            border-color: @accent;
+        }
     }
 
     .button {
         .button();
     }
 
-    .job {
-        margin-top: 12px;
+    // Прокрутка для таблицы: у строки много столбцов, и на узком окне
+    // таблица не должна раздвигать панель.
+    .scroll {
+        margin: 12px 0;
+        overflow-x: auto;
+    }
+
+    // Таблица очереди: строка на работу, мелкий моноширинный шрифт,
+    // чтобы номера и времена читались в столбец.
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+
+        th,
+        td {
+            padding: 6px 8px;
+            border-bottom: 1px solid @border;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            color: @text-muted;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        td {
+            font-family: ui-monospace, "SFMono-Regular", monospace;
+        }
+
+        // Текст работы может быть длинным: одна строка с многоточием,
+        // чтобы таблица не разъезжалась по ширине.
+        .text {
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
     }
 
     .actions {

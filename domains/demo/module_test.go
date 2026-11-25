@@ -68,6 +68,7 @@ func TestRegister(t *testing.T) {
 
 	for _, key := range []string{
 		"GET /api/demo",
+		"GET /api/demo/jobs",
 		"POST /api/demo/jobs",
 		"GET /api/demo/jobs/{id}",
 	} {
@@ -157,6 +158,49 @@ func TestEnqueueValidation(t *testing.T) {
 	var e *core.Error
 	if err == nil || !errors.As(err, &e) || e.Status != http.StatusBadRequest {
 		t.Fatalf("ошибка: %v", err)
+	}
+}
+
+// TestQueue — очередь отдаётся таблицей: столбцы заполнены, свежая работа
+// идёт первой, а работа в очереди показана без времени начала.
+func TestQueue(t *testing.T) {
+	reg := jobs.NewRegistry()
+	if err := reg.Add(kind, jobs.Spec{
+		Class:   jobs.ClassBackground,
+		Handler: (&module{}).run,
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := jobs.NewDispatcher(jobs.NewMemoryQueue(), reg)
+	m := &module{disp: d, journal: journal.Discard{}}
+
+	for _, text := range []string{"первая", "вторая"} {
+		if _, err := m.enqueue(httptest.NewRequest(http.MethodPost, "/api/demo/jobs",
+			strings.NewReader(`{"text":"`+text+`"}`))); err != nil {
+			t.Fatalf("enqueue %q: %v", text, err)
+		}
+	}
+
+	value, err := m.queue(httptest.NewRequest(http.MethodGet, "/api/demo/jobs", nil))
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	rows, ok := value.([]queueRow)
+	if !ok {
+		t.Fatalf("ответ %T, ожидался []queueRow", value)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("строк %d, ожидалось 2", len(rows))
+	}
+	// Свежая работа сверху.
+	if rows[0].Text != "вторая" || rows[1].Text != "первая" {
+		t.Fatalf("порядок: %q, %q", rows[0].Text, rows[1].Text)
+	}
+	if rows[0].Status != jobs.StatusQueued || rows[0].CreatedAt == nil {
+		t.Fatalf("строка: %+v", rows[0])
+	}
+	if rows[0].StartedAt != nil {
+		t.Fatalf("у работы в очереди время начала: %v", rows[0].StartedAt)
 	}
 }
 

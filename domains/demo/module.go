@@ -34,6 +34,10 @@ const (
 	// tickPeriod — период демонстрационного события: десять секунд, чтобы
 	// срабатывание было видно без долгого ожидания.
 	tickPeriod = 10 * time.Second
+
+	// queueLimit — сколько последних работ показывать в таблице. Очередь
+	// растёт от срабатываний события, и вся она в интерфейсе не нужна.
+	queueLimit = 20
 )
 
 // module — демонстрационный модуль.
@@ -72,6 +76,7 @@ func (m *module) Register(r core.Registry) error {
 	}))
 
 	r.HTTP("GET", "/api/demo", m.snapshot)
+	r.HTTP("GET", "/api/demo/jobs", m.queue)
 	r.HTTP("POST", "/api/demo/jobs", m.enqueue)
 	r.HTTP("GET", "/api/demo/jobs/{id}", m.status)
 
@@ -122,6 +127,18 @@ type eventView struct {
 	Kind   string `json:"kind"`
 	Period string `json:"period"`
 	Fired  int64  `json:"fired"`
+}
+
+// queueRow — строка таблицы очереди для клиента.
+type queueRow struct {
+	ID        string     `json:"id"`
+	Kind      string     `json:"kind"`
+	Class     jobs.Class `json:"class"`
+	Status    string     `json:"status"`
+	Text      string     `json:"text"`
+	Attempts  int        `json:"attempts"`
+	CreatedAt *time.Time `json:"createdAt"`
+	StartedAt *time.Time `json:"startedAt"`
 }
 
 // task — тело демонстрационной работы.
@@ -210,6 +227,50 @@ func (m *module) enqueue(r *http.Request) (any, error) {
 		return nil, fmt.Errorf("demo: работа %s пропала после постановки", id)
 	}
 	return view(job, status)
+}
+
+// queue отдаёт состояние очереди таблицей: новые работы сверху.
+func (m *module) queue(r *http.Request) (any, error) {
+	entries, err := m.disp.List(r.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]queueRow, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, rowView(e.Job, e.Status))
+	}
+
+	// Свежая работа нужнее прежней: переворачиваем порядок очереди, чтобы
+	// только что поставленная строка была видна без прокрутки.
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+
+	// Вся очередь в интерфейсе не нужна: событие добавляет работу каждые
+	// десять секунд, поэтому отдаём последние queueLimit строк.
+	if len(rows) > queueLimit {
+		rows = rows[:queueLimit]
+	}
+	return rows, nil
+}
+
+// rowView собирает строку таблицы. Тело разбирается нестрого: у работы может
+// быть любое тело, а в таблицу попадает только текст задачи, если он есть.
+func rowView(job jobs.Job, status string) queueRow {
+	var in task
+	_ = json.Unmarshal(job.Payload, &in)
+
+	return queueRow{
+		ID:        job.ID,
+		Kind:      string(job.Kind),
+		Class:     job.Class,
+		Status:    status,
+		Text:      in.Text,
+		Attempts:  job.Attempts,
+		CreatedAt: moment(job.CreatedAt),
+		StartedAt: moment(job.StartedAt),
+	}
 }
 
 func (m *module) status(r *http.Request) (any, error) {

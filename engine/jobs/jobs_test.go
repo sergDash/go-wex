@@ -18,6 +18,39 @@ var allClasses = []Class{ClassInteractive, ClassBackground}
 // сравнивается точно, без обращения к системным часам.
 var testNow = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 
+// TestList — очередь отдаёт все строки по возрастанию номера и со статусом:
+// по этому списку строится таблица снаружи.
+func TestList(t *testing.T) {
+	q := NewMemoryQueue()
+	ctx := context.Background()
+
+	first, err := q.Enqueue(ctx, testNow, "a", nil, ClassBackground)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	second, err := q.Enqueue(ctx, testNow, "b", nil, ClassBackground)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, ok, err := q.Claim(ctx, testNow, allClasses); err != nil || !ok {
+		t.Fatalf("Claim: ok=%v err=%v", ok, err)
+	}
+
+	entries, err := q.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("строк %d, ожидалось 2", len(entries))
+	}
+	if entries[0].Job.ID != first || entries[1].Job.ID != second {
+		t.Fatalf("порядок: %s, %s", entries[0].Job.ID, entries[1].Job.ID)
+	}
+	if entries[0].Status != StatusRunning || entries[1].Status != StatusQueued {
+		t.Fatalf("статусы: %q, %q", entries[0].Status, entries[1].Status)
+	}
+}
+
 // TestTimesOnEnqueueClaimAndRetry — при постановке записывается время
 // создания, при захвате — время начала, а возврат в очередь его очищает:
 // работа снова ждёт, и прошлая попытка остаётся только в журнале.
