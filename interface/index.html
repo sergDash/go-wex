@@ -234,54 +234,69 @@
                     Данные лежат локально — выбор никуда не отправляется.
                 </p>
 
-                <p class="label">Виджет на компоненте</p>
-                <div class="line">
-                    <x-select class="demo" :items="colorItems" :value="componentColor"
-                              @change="onComponentColor"></x-select>
-                    <span class="hint">выбрано: {{ componentColor || '—' }}</span>
-                </div>
+                <div class="columns">
+                    <div class="column">
+                        <p class="label">Обычные</p>
 
-                <p class="label">Простой выбор</p>
-                <div class="select demo simple" w-class="{ 'open': selects.color.open }">
-                    <div class="selected" data-select="color" w-on="click:toggleSelect">
-                        <span class="value">{{ selects.color.label }}</span>
-                        <span class="caret">▾</span>
-                    </div>
-                    <div class="options" w-if="selects.color.open">
-                        <div class="option" w-for="item in colors traceby item"
-                             data-select="color" data-value="{{ item }}"
-                             w-on="click:pickSelect">{{ item }}</div>
-                    </div>
-                </div>
-
-                <p class="label">Выбор с поиском</p>
-                <div class="select demo searchable" w-class="{ 'open': selects.city.open }">
-                    <div class="selected" data-select="city" w-on="click:toggleSelect">
-                        <span class="value">{{ selects.city.label }}</span>
-                        <span class="caret">▾</span>
-                    </div>
-                    <div class="options" w-if="selects.city.open">
-                        <div class="search">
-                            <input class="input" w-bind="selects.city.query"
-                                   w-on="input:filterCities" w-focus placeholder="поиск">
+                        <p class="label">Простой</p>
+                        <div class="select simple" w-class="{ 'open': selects.color.open }">
+                            <div class="selected" data-select="color" w-on="click:toggleSelect">
+                                <span class="value">{{ selects.color.label }}</span>
+                                <span class="caret">▾</span>
+                            </div>
+                            <div class="options" w-if="selects.color.open">
+                                <div class="option" w-for="item in colors traceby item"
+                                     data-select="color" data-value="{{ item }}"
+                                     w-on="click:pickSelect">{{ item }}</div>
+                            </div>
                         </div>
-                        <div class="option" w-for="item in cityMatches traceby item"
-                             data-select="city" data-value="{{ item }}"
-                             w-on="click:pickSelect">{{ item }}</div>
-                    </div>
-                </div>
 
-                <p class="label">Множественный выбор</p>
-                <div class="select demo multiple" w-class="{ 'open': selects.tags.open }">
-                    <div class="selected" data-select="tags" w-on="click:toggleSelect">
-                        <span class="value">{{ selects.tags.value.join(', ') || '— не выбрано —' }}</span>
-                        <span class="caret">▾</span>
+                        <p class="label">С поиском</p>
+                        <div class="select searchable" w-class="{ 'open': selects.city.open }">
+                            <div class="selected" data-select="city" w-on="click:toggleSelect">
+                                <span class="value">{{ selects.city.label }}</span>
+                                <span class="caret">▾</span>
+                            </div>
+                            <div class="options" w-if="selects.city.open">
+                                <div class="search">
+                                    <input class="input" w-bind="selects.city.query"
+                                           w-on="input:filterCities" w-focus placeholder="поиск">
+                                </div>
+                                <div class="option" w-for="item in cityMatches traceby item"
+                                     data-select="city" data-value="{{ item }}"
+                                     w-on="click:pickSelect">{{ item }}</div>
+                            </div>
+                        </div>
+
+                        <p class="label">Множественный</p>
+                        <div class="select multiple" w-class="{ 'open': selects.tags.open }">
+                            <div class="selected" data-select="tags" w-on="click:toggleSelect">
+                                <span class="value">{{ selects.tags.value.join(', ') || '— не выбрано —' }}</span>
+                                <span class="caret">▾</span>
+                            </div>
+                            <div class="options" w-if="selects.tags.open">
+                                <div class="option" w-for="item in tags traceby item"
+                                     w-class="{ 'picked': selects.tags.value.includes(item) }"
+                                     data-select="tags" data-value="{{ item }}"
+                                     w-on="click:pickSelect">{{ item }}</div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="options" w-if="selects.tags.open">
-                        <div class="option" w-for="item in tags traceby item"
-                             w-class="{ 'picked': selects.tags.value.includes(item) }"
-                             data-select="tags" data-value="{{ item }}"
-                             w-on="click:pickSelect">{{ item }}</div>
+
+                    <div class="column">
+                        <p class="label">На компонентах</p>
+
+                        <p class="label">Простой</p>
+                        <x-select :items="colorItems" :value="componentColor"
+                                  @change="onComponentColor"></x-select>
+
+                        <p class="label">С поиском</p>
+                        <x-select-search :items="cityItems" :value="componentCity"
+                                         @change="onComponentCity"></x-select-search>
+
+                        <p class="label">Множественный</p>
+                        <x-select-multi :items="tagItems" :value="componentTags"
+                                        @change="onComponentTags"></x-select-multi>
                     </div>
                 </div>
             </section>
@@ -316,6 +331,37 @@
                      w-class="{ 'picked': value === item.value }"
                      data-value="{{ item.value }}"
                      w-on="click:pick">{{ item.label }}</div>
+            </div>
+        </div>
+    </template>
+
+    <template id="x-select-search">
+        <div class="select widget searchable" w-class="{ 'open': open }">
+            <div class="selected" w-on="click:toggle">
+                <span class="value">{{ value || '— не выбрано —' }}</span>
+                <span class="caret">▾</span>
+            </div>
+            <div class="options" w-if="open">
+                <div class="search">
+                    <input class="input" w-bind="query" w-on="input:filter"
+                           w-focus placeholder="поиск">
+                </div>
+                <div class="option" w-for="item in matches traceby item.value"
+                     data-value="{{ item.value }}" w-on="click:pick">{{ item.label }}</div>
+            </div>
+        </div>
+    </template>
+
+    <template id="x-select-multi">
+        <div class="select widget multiple" w-class="{ 'open': open }">
+            <div class="selected" w-on="click:toggle">
+                <span class="value">{{ value.join(', ') || '— не выбрано —' }}</span>
+                <span class="caret">▾</span>
+            </div>
+            <div class="options" w-if="open">
+                <div class="option" w-for="item in items traceby item.value"
+                     w-class="{ 'picked': value.includes(item.value) }"
+                     data-value="{{ item.value }}" w-on="click:pick">{{ item.label }}</div>
             </div>
         </div>
     </template>

@@ -288,6 +288,28 @@ x-select {
         gap: 12px;
     }
 
+    // Две колонки для сравнения: обычные списки и списки-компоненты.
+    .columns {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        align-items: start;
+    }
+
+    // Колонка: подпись, список, подпись, список.
+    .column {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+
+        // Компонент занимает ширину колонки, список заполняет его.
+        x-select,
+        x-select-search,
+        x-select-multi {
+            display: block;
+        }
+    }
+
     // Ширины списков в конкретных местах.
     .mode {
         width: 320px;
@@ -297,9 +319,6 @@ x-select {
         width: 190px;
     }
 
-    .demo {
-        width: 240px;
-    }
 
     .button {
         .button();

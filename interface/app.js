@@ -9,6 +9,8 @@
 //    SC-16, он ещё не сделан.
 $(function () {
     var colors = ['красный', 'зелёный', 'синий', 'жёлтый'];
+    var cities = ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'];
+    var tags = ['гость', 'подписчик', 'автор', 'редактор'];
 
     // options переводит строки в пункты списка: компоненту нужны значение
     // и подпись, даже когда они совпадают.
@@ -19,6 +21,25 @@ $(function () {
             out.push({ value: list[i], label: list[i] });
         }
         return out;
+    }
+
+    // watchOutside закрывает список компонента кликом мимо своего окна:
+    // клик по другому списку — старый или компонент — тоже считается мимо,
+    // поэтому одновременно открыт только один.
+    var watched = new WeakSet();
+
+    function watchOutside(view, state) {
+        if (watched.has(state)) {
+            return;
+        }
+        watched.add(state);
+        document.addEventListener('click', function (event) {
+            var root = view.find('.select')[0];
+
+            if (!root || !root.contains(event.target)) {
+                state.open = false;
+            }
+        });
     }
 
     var view = $('#app').state({
@@ -47,9 +68,13 @@ $(function () {
         colors: colors,
         colorItems: options(colors),
         componentColor: '',
-        cities: ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'],
-        cityMatches: ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'],
-        tags: ['гость', 'подписчик', 'автор', 'редактор'],
+        cityItems: options(cities),
+        componentCity: '',
+        tagItems: options(tags),
+        componentTags: [],
+        cities: cities,
+        cityMatches: cities.slice(),
+        tags: tags,
         text: 'раз',
         failure: ''
     });
@@ -63,6 +88,8 @@ $(function () {
             return { items: [], value: '', open: false };
         })
         .method('toggle', function (state) {
+            watchOutside(this, state);
+
             return function () {
                 state.open = !state.open;
             };
@@ -76,25 +103,110 @@ $(function () {
                 component.emit('change', state.value);
             };
         })
-        .on('$mount', function (state) {
-            return function () {
-                // Клик мимо закрывает список: обработчик на документе,
-                // клики внутри любого списка пропускаются.
-                document.addEventListener('click', function (event) {
-                    if (!event.target.closest('.select')) {
-                        state.open = false;
-                    }
-                });
-            };
-        });
 
     view.component('x-select', xSelect);
+
+    // x-select-search — список с поиском: пункты фильтруются по вводу,
+    // поле получает фокус при открытии.
+    var xSelectSearch = $('#x-select-search')
+        .state(function () {
+            return { items: [], matches: [], value: '', open: false, query: '' };
+        })
+        .directive('w-focus', null, function ($el) {
+            $el[0].focus();
+        })
+        .method('toggle', function (state) {
+            watchOutside(this, state);
+
+            return function () {
+                state.open = !state.open;
+                if (state.open) {
+                    state.matches = state.items;
+                    state.query = '';
+                }
+            };
+        })
+        .method('filter', function (state) {
+            return function (event) {
+                var query = event.currentTarget.value.trim().toLowerCase();
+                var matches = [];
+
+                for (var i = 0; i < state.items.length; i++) {
+                    if (state.items[i].label.toLowerCase().indexOf(query) >= 0) {
+                        matches.push(state.items[i]);
+                    }
+                }
+                state.matches = matches;
+            };
+        })
+        .method('pick', function (state) {
+            var component = this;
+
+            return function (event) {
+                state.value = event.currentTarget.dataset.value;
+                state.open = false;
+                component.emit('change', state.value);
+            };
+        })
+
+    view.component('x-select-search', xSelectSearch);
+
+    // x-select-multi — множественный выбор: пункт переключается, список
+    // остаётся открытым, наружу уходит массив значений.
+    var xSelectMulti = $('#x-select-multi')
+        .state(function () {
+            return { items: [], value: [], open: false };
+        })
+        .method('toggle', function (state) {
+            watchOutside(this, state);
+
+            return function () {
+                state.open = !state.open;
+            };
+        })
+        .method('pick', function (state) {
+            var component = this;
+
+            return function (event) {
+                var chosen = event.currentTarget.dataset.value;
+                var next = [];
+                var found = false;
+
+                for (var i = 0; i < state.value.length; i++) {
+                    if (state.value[i] === chosen) {
+                        found = true;
+                    } else {
+                        next.push(state.value[i]);
+                    }
+                }
+                if (!found) {
+                    next.push(chosen);
+                }
+
+                state.value = next;
+                component.emit('change', next);
+            };
+        })
+
+    view.component('x-select-multi', xSelectMulti);
 
     // onComponentColor принимает выбранное от компонента: значение приходит
     // аргументом события, а не через DOM.
     view.method('onComponentColor', function (state) {
         return function (value) {
             state.componentColor = value;
+        };
+    });
+
+    view.method('onComponentCity', function (state) {
+        return function (value) {
+            state.componentCity = value;
+        };
+    });
+
+    view.method('onComponentTags', function (state) {
+        return function (value) {
+            state.componentTags = value;
         };
     });
 
@@ -430,7 +542,10 @@ $(function () {
     // списки разбросаны по странице; клик внутри списка пропускается,
     // иначе он закрыл бы тот список, в котором выбирают.
     document.addEventListener('click', function (event) {
-        if (event.target.closest('.select')) {
+        var inSelect = event.target.closest('.select');
+        var inComponent = event.target.closest('x-select, x-select-search, x-select-multi');
+
+        if (inSelect && !inComponent) {
             return;
         }
         view.update(function (state) {
