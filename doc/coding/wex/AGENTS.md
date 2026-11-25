@@ -61,6 +61,7 @@
 | `book/16. Prefetch.md` | предзагрузка |
 | `book/Плагины/` | главы по плагинам: редактор, таблица, датапикер, галерея, роутер |
 | `book/Примеры кода/` | примеры к одному-двум разделам |
+| `book/ai.txt` | вся книга одним файлом: удобно, когда нужен общий контекст |
 
 Проект плагины wex не использует: они лежат в книге как справка, а не как
 зависимость. Плагин подключается отдельным файлом из `dist/plugins/`,
@@ -110,6 +111,7 @@ cp ~/src/wex-sergDash/dist/wex.min.js interface/vendor/wex.min.js
 rm -rf doc/coding/wex/book
 cp -r ~/src/wex-sergDash/education/Книга doc/coding/wex/book
 cp ~/src/wex-sergDash/education/API.MD doc/coding/wex/api.md
+cp ~/src/wex-sergDash/education/AI.txt doc/coding/wex/book/ai.txt
 cp ~/src/wex-sergDash/MIGRATION.MD doc/coding/wex/Переход-на-3.md
 ```
 
