@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>go + wex — панель демо</title>
+    <!-- Зелёная точка вкладки: без файла браузер просит /favicon.ico и получает 404. -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <!--
         Исходник стилей — Less. less.js компилирует его в браузере,
         поэтому сборщик для CSS не нужен. Скрипт идёт сразу после link:
@@ -42,12 +44,16 @@
                 </h2>
                 <p class="note">
                     HTTP-служба отвечает на запрос и отдаёт данные в общем
-                    конверте: успех — result, ошибка — error. Снимок
-                    перечитывается кнопкой внизу страницы.
+                    конверте: успех — result, ошибка — error. Кнопка
+                    «Проверить» отправляет запрос <code>GET /api/health</code>
+                    заново — его видно в инструментах веб-разработчика.
                 </p>
-                <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
-                    <span class="dot"></span>{{ status }}
-                </p>
+                <div class="probe">
+                    <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
+                        <span class="dot"></span>{{ status }}
+                    </p>
+                    <button class="button" w-on="click:check" w-disabled="checking">Проверить</button>
+                </div>
             </section>
 
             <section class="block">

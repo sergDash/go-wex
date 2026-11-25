@@ -31,5 +31,5 @@ type health struct {
 }
 
 func handle(*http.Request) (any, error) {
-	return health{OK: true, Status: "сервер отвечает"}, nil
+	return health{OK: true, Status: "сервер ответил"}, nil
 }

@@ -85,6 +85,7 @@ $(function () {
     // идут параллельно, шаблон перерисовывается один раз.
     function snapshot(state) {
         state.checking = true;
+        state.status = 'проверяем связь с сервером…';
 
         Promise.all([call('/api/health'), call('/api/demo'), call('/api/demo/jobs')])
             .then(function (values) {
@@ -106,6 +107,28 @@ $(function () {
                 state.failure = error.message;
             });
     }
+
+    // check повторяет тот запрос, которым страница проверяет связь. Кнопка
+    // нужна не для данных, а чтобы запрос было видно в инструментах
+    // веб-разработчика: нажатие оставляет одну строку в сетевой панели.
+    view.method('check', function (state) {
+        return function () {
+            state.checking = true;
+            state.status = 'проверяем связь с сервером…';
+
+            call('/api/health')
+                .then(function (health) {
+                    state.checking = false;
+                    state.ok = health.ok;
+                    state.status = health.status;
+                })
+                .catch(function (error) {
+                    state.checking = false;
+                    state.ok = false;
+                    state.status = 'сервер не ответил: ' + error.message;
+                });
+        };
+    });
 
     // refresh перечитывает снимок по кнопке: опроса нет.
     view.method('refresh', function (state) {
