@@ -21,8 +21,11 @@ $(function () {
         jobs: [],
         services: [],
         events: [],
+        deletable: [],
         eventText: 'напоминание',
         eventSeconds: 10,
+        deleteMode: 'event',
+        deleteId: '',
         text: 'раз',
         failure: ''
     });
@@ -83,8 +86,22 @@ $(function () {
             kind: row.kind,
             period: row.period,
             next: momentText(row.next, '—'),
+            declared: row.declared,
             source: row.declared ? 'код' : 'данные'
         };
+    }
+
+    // deletableRows — события, которые можно удалить: объявленные кодом
+    // в список не попадают, они вернутся на следующем проходе.
+    function deletableRows(rows) {
+        var out = [];
+
+        for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].declared) {
+                out.push({ id: rows[i].id });
+            }
+        }
+        return out;
     }
 
     // loadEvents перечитывает список событий: и объявленных кодом, и
@@ -92,6 +109,7 @@ $(function () {
     function loadEvents(state) {
         return call('/api/events').then(function (rows) {
             state.events = rows.map(eventState);
+            state.deletable = deletableRows(rows);
             state.failure = '';
         });
     }
@@ -133,6 +151,7 @@ $(function () {
                 state.jobs = rows.map(rowState);
                 state.services = services;
                 state.events = events.map(eventState);
+                state.deletable = deletableRows(events);
                 state.failure = '';
             })
             .catch(function (error) {
@@ -183,6 +202,29 @@ $(function () {
                 })
                 .then(function () {
                     return loadJobs(state);
+                })
+                .catch(function (error) {
+                    state.failure = error.message;
+                });
+        };
+    });
+
+    // deleteEvent убирает выбранное событие выбранным способом. По умолчанию
+    // исчезает только событие; работы, которые оно поставило, остаются
+    // в очереди. Аргумент берётся из стейта: w-on не передаёт параметров,
+    // обработчик получает только событие DOM.
+    view.method('deleteEvent', function (state) {
+        return function () {
+            if (!state.deleteId) {
+                return;
+            }
+
+            call('/api/events/' + encodeURIComponent(state.deleteId) + '?mode=' + encodeURIComponent(state.deleteMode), {
+                method: 'DELETE'
+            })
+                .then(function () {
+                    state.deleteId = '';
+                    return loadEvents(state);
                 })
                 .catch(function (error) {
                     state.failure = error.message;

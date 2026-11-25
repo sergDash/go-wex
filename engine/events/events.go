@@ -352,6 +352,33 @@ func (s *Scheduler) fire(ctx context.Context, id string, kind jobs.Kind, payload
 	return job, nil
 }
 
+// ErrDeclared — событие объявлено кодом: следующий проход создаст его заново,
+// поэтому удалять нечего.
+var ErrDeclared = errors.New("событие объявлено кодом")
+
+// ErrNotFound — события с таким номером нет.
+var ErrNotFound = errors.New("событие не найдено")
+
+// Delete убирает событие, добавленное данными. Работы, которые оно уже
+// поставило, остаются в очереди: событие и работа живут отдельно, связи
+// между ними нет. Событие из кода не удаляется — оно вернётся на следующем
+// проходе, и отказ честнее молчаливого возврата.
+func (s *Scheduler) Delete(id string) error {
+	if _, declared := s.reg.Rule(Kind(id)); declared {
+		return fmt.Errorf("%w: %q", ErrDeclared, id)
+	}
+
+	var rec record
+	ok, err := s.store.Get(collection, id, &rec)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	return s.store.Delete(collection, id)
+}
+
 // advance — срок после срабатывания: первый из сроков, который ещё впереди.
 // Деление вместо цикла: срок мог отстать на годы, и цикл по короткому периоду
 // висел бы на каждом проходе.

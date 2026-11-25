@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -84,6 +85,7 @@ func (m *module) Register(r core.Registry) error {
 	r.HTTP("GET", "/api/services", m.services)
 	r.HTTP("GET", "/api/events", m.eventsList)
 	r.HTTP("POST", "/api/events", m.addEvent)
+	r.HTTP("DELETE", "/api/events/{id}", m.deleteEvent)
 	r.HTTP("GET", "/api/demo/jobs", m.queue)
 	r.HTTP("POST", "/api/demo/jobs", m.enqueue)
 	r.HTTP("GET", "/api/demo/jobs/{id}", m.status)
@@ -309,6 +311,54 @@ func (m *module) addEvent(r *http.Request) (any, error) {
 		return nil, err
 	}
 	return map[string]string{"id": id}, nil
+}
+
+// Режимы удаления события. По умолчанию убирается только событие: работы,
+// которые оно уже поставило, остаются в очереди.
+const (
+	deleteEventOnly = "event"
+	deleteWithJobs  = "event-and-jobs"
+)
+
+// deleteEvent убирает событие. Режим приходит параметром mode; удаление
+// вместе с работами объявлено, но ещё не сделано — связи между событием
+// и поставленными им работами пока нет.
+func (m *module) deleteEvent(r *http.Request) (any, error) {
+	if m.events == nil {
+		return nil, &core.Error{Status: http.StatusServiceUnavailable, Message: "служба событий не поднята"}
+	}
+
+	id := r.PathValue("id")
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = deleteEventOnly
+	}
+
+	switch mode {
+	case deleteEventOnly:
+		if err := m.events.Delete(id); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, events.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			if errors.Is(err, events.ErrDeclared) {
+				status = http.StatusConflict
+			}
+			return nil, &core.Error{Status: status, Message: err.Error()}
+		}
+		return map[string]string{"deleted": id}, nil
+
+	case deleteWithJobs:
+		// Задел на будущую проработку: отказ честнее, чем удалить событие
+		// и промолчать о том, что работы остались.
+		return nil, &core.Error{
+			Status:  http.StatusNotImplemented,
+			Message: "удаление вместе с работами пока не сделано; событие не удалено",
+		}
+
+	default:
+		return nil, &core.Error{Status: http.StatusBadRequest, Message: "mode: event или event-and-jobs"}
+	}
 }
 
 // queue отдаёт состояние очереди таблицей: новые работы сверху.

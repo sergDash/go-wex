@@ -73,6 +73,7 @@ func TestRegister(t *testing.T) {
 		"GET /api/services",
 		"GET /api/events",
 		"POST /api/events",
+		"DELETE /api/events/{id}",
 		"GET /api/demo/jobs",
 		"POST /api/demo/jobs",
 		"GET /api/demo/jobs/{id}",
@@ -252,6 +253,86 @@ func TestEventValidation(t *testing.T) {
 		if err == nil || !errors.As(err, &e) || e.Status != http.StatusBadRequest {
 			t.Fatalf("тело %s: ошибка %v", body, err)
 		}
+	}
+}
+
+// TestDeleteEvent — по умолчанию удаляется только событие, а повторное
+// удаление даёт 404.
+func TestDeleteEvent(t *testing.T) {
+	jobReg := jobs.NewRegistry()
+	if err := jobReg.Add(kind, jobs.Spec{Class: jobs.ClassBackground, Handler: (&module{}).run}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
+	m := &module{disp: d, journal: journal.Discard{}, events: newEventScheduler(t, d)}
+
+	value, err := m.addEvent(httptest.NewRequest(http.MethodPost, "/api/events",
+		strings.NewReader(`{"text":"раз","seconds":5}`)))
+	if err != nil {
+		t.Fatalf("addEvent: %v", err)
+	}
+	id := value.(map[string]string)["id"]
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/events/"+id, nil)
+	req.SetPathValue("id", id)
+	if _, err := m.deleteEvent(req); err != nil {
+		t.Fatalf("deleteEvent: %v", err)
+	}
+
+	value, err = m.eventsList(httptest.NewRequest(http.MethodGet, "/api/events", nil))
+	if err != nil {
+		t.Fatalf("eventsList: %v", err)
+	}
+	if rows := value.([]eventRow); len(rows) != 0 {
+		t.Fatalf("после удаления событий %d", len(rows))
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/events/"+id, nil)
+	req.SetPathValue("id", id)
+	var e *core.Error
+	if _, err := m.deleteEvent(req); !errors.As(err, &e) || e.Status != http.StatusNotFound {
+		t.Fatalf("повторное удаление: %v", err)
+	}
+}
+
+// TestDeleteModes — режим «вместе с работами» отвечает 501, неизвестный 400,
+// и ни один из них не удаляет событие.
+func TestDeleteModes(t *testing.T) {
+	jobReg := jobs.NewRegistry()
+	if err := jobReg.Add(kind, jobs.Spec{Class: jobs.ClassBackground, Handler: (&module{}).run}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
+	m := &module{journal: journal.Discard{}, events: newEventScheduler(t, d)}
+
+	value, err := m.addEvent(httptest.NewRequest(http.MethodPost, "/api/events",
+		strings.NewReader(`{"text":"раз","seconds":5}`)))
+	if err != nil {
+		t.Fatalf("addEvent: %v", err)
+	}
+	id := value.(map[string]string)["id"]
+
+	for _, c := range []struct {
+		mode string
+		want int
+	}{
+		{mode: "event-and-jobs", want: http.StatusNotImplemented},
+		{mode: "bad", want: http.StatusBadRequest},
+	} {
+		req := httptest.NewRequest(http.MethodDelete, "/api/events/"+id+"?mode="+c.mode, nil)
+		req.SetPathValue("id", id)
+		var e *core.Error
+		if _, err := m.deleteEvent(req); !errors.As(err, &e) || e.Status != c.want {
+			t.Fatalf("режим %q: %v", c.mode, err)
+		}
+	}
+
+	value, err = m.eventsList(httptest.NewRequest(http.MethodGet, "/api/events", nil))
+	if err != nil {
+		t.Fatalf("eventsList: %v", err)
+	}
+	if rows := value.([]eventRow); len(rows) != 1 {
+		t.Fatalf("событий после отказов: %d", len(rows))
 	}
 }
 

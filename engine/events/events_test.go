@@ -460,6 +460,42 @@ func TestList(t *testing.T) {
 	}
 }
 
+// TestDelete — событие, добавленное данными, удаляется; объявленный кодом
+// вид удалить нельзя, иначе следующий проход создал бы его заново.
+func TestDelete(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("tick", Rule{Period: time.Hour}); err != nil {
+		t.Fatalf("объявление вида: %v", err)
+	}
+	rec := &recorder{}
+	s, _ := newScheduler(t, reg, rec)
+	s.SetClock(clock.NewManual(base))
+	ctx := context.Background()
+
+	id, err := s.Add("beat", time.Minute, jobs.ClassBackground, nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := s.Delete(id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := s.Delete(id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("повторное удаление: %v", err)
+	}
+	if err := s.Delete("tick"); !errors.Is(err, ErrDeclared) {
+		t.Fatalf("удаление вида из кода: %v", err)
+	}
+
+	// Удалённое событие больше не ставит работ.
+	fired, err := s.Step(ctx, base.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("шаг после удаления: %v", err)
+	}
+	if len(fired) != 0 {
+		t.Fatalf("после удаления срабатываний %d, ожидалось 0", len(fired))
+	}
+}
+
 // TestServiceStops — служба запускается и останавливается, не оставляя
 // висящей горутины.
 func TestServiceStops(t *testing.T) {
