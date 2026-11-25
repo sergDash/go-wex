@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>go + wex — скелет</title>
+    <title>go + wex — панель демо</title>
     <!--
         Исходник стилей — Less. less.js компилирует его в браузере,
         поэтому сборщик для CSS не нужен. Скрипт идёт сразу после link:
@@ -20,18 +20,143 @@
     -->
     <template id="app">
         <main class="panel">
-            <h1 class="title">Скелет go + wex</h1>
-            <p class="lead">
-                Сервер на Go отдаёт страницу и JSON, интерфейс на wex
-                отрисовывает состояние, полученное по HTTP.
-            </p>
             <!--
-                Классы состояния зависят от полей стейта ok и checking:
-                ok — сервер ответил успешно, error — запрос не удался.
+                Шапка не зависит от стейта, поэтому помечена w-static:
+                перерисовки её не касаются.
             -->
-            <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
-                <span class="dot"></span>{{ status }}
-            </p>
+            <header class="head" w-static>
+                <h1 class="title">Движок go + wex: панель демо</h1>
+                <p class="lead">
+                    Каждая секция показывает одну возможность движка.
+                    Пояснение говорит, что происходит и что нажать, чтобы
+                    это увидеть. Номер рядом с заголовком — сценарий из
+                    <code>doc/capabilities/scenarios.md</code>; полный текст
+                    лежит там, здесь только подпись.
+                </p>
+            </header>
+
+            <section class="block">
+                <h2 class="caption">
+                    Связь с сервером
+                    <span class="scenario">SC-05</span>
+                </h2>
+                <p class="note">
+                    HTTP-служба отвечает на запрос и отдаёт данные в общем
+                    конверте: успех — result, ошибка — error. Снимок
+                    перечитывается кнопкой внизу страницы.
+                </p>
+                <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
+                    <span class="dot"></span>{{ status }}
+                </p>
+            </section>
+
+            <section class="block">
+                <h2 class="caption">
+                    Слушатели TCP и UDP
+                    <span class="scenario">SC-02</span>
+                </h2>
+                <p class="note">
+                    Модуль открыл два сокета на свободных портах. Счётчик
+                    строк растёт, когда в сокет приходит строка: отправьте
+                    её любым клиентом и обновите снимок.
+                </p>
+                <p class="fact">
+                    <span class="name">TCP</span>
+                    <span class="value">{{ demo.tcp }}</span>
+                </p>
+                <p class="fact">
+                    <span class="name">UDP</span>
+                    <span class="value">{{ demo.udp }}</span>
+                </p>
+                <p class="fact">
+                    <span class="name">Строк принято</span>
+                    <span class="value">{{ demo.lines }}</span>
+                </p>
+            </section>
+
+            <section class="block">
+                <h2 class="caption">
+                    Работа в очереди
+                    <span class="scenario">SC-08</span>
+                </h2>
+                <p class="note">
+                    Запрос только ставит работу и сразу отдаёт номер;
+                    выполняет её разборщик в фоне. Пока работа ждёт, время
+                    начала пустое; после выполнения оно остаётся, а номер
+                    попытки считается.
+                </p>
+                <div class="line">
+                    <input class="input" w-bind="text" placeholder="текст работы">
+                    <button class="button" w-on="click:enqueue">Поставить</button>
+                </div>
+                <div class="job" w-if="job">
+                    <p class="fact">
+                        <span class="name">Номер</span>
+                        <span class="value">{{ job.id }}</span>
+                    </p>
+                    <p class="fact">
+                        <span class="name">Статус</span>
+                        <span class="value">{{ job.status }}</span>
+                    </p>
+                    <p class="fact">
+                        <span class="name">Текст</span>
+                        <span class="value">{{ job.text }}</span>
+                    </p>
+                    <p class="fact">
+                        <span class="name">Попытка</span>
+                        <span class="value">{{ job.attempts }}</span>
+                    </p>
+                    <p class="fact">
+                        <span class="name">Создана</span>
+                        <span class="value">{{ job.createdAt }}</span>
+                    </p>
+                    <p class="fact">
+                        <span class="name">Начата</span>
+                        <span class="value">{{ job.startedAt }}</span>
+                    </p>
+                    <button class="button" w-on="click:refreshJob">Обновить работу</button>
+                </div>
+            </section>
+
+            <section class="block">
+                <h2 class="caption">
+                    Отложенное событие
+                    <span class="scenario">SC-10</span>
+                </h2>
+                <p class="note">
+                    Событие ставит работу по сроку само, без запроса. Срок
+                    лежит в хранилище: после перезапуска он продолжается,
+                    а пропущенные сроки дают одно срабатывание.
+                </p>
+                <p class="fact">
+                    <span class="name">Вид</span>
+                    <span class="value">{{ demo.event.kind }}</span>
+                </p>
+                <p class="fact">
+                    <span class="name">Период</span>
+                    <span class="value">{{ demo.event.period }}</span>
+                </p>
+                <p class="fact">
+                    <span class="name">Срабатываний</span>
+                    <span class="value">{{ demo.event.fired }}</span>
+                </p>
+                <p class="note">
+                    Счётчик считает сам процесс: после перезапуска он
+                    начинается с нуля, а срок — нет.
+                </p>
+            </section>
+
+            <footer class="actions">
+                <button class="button" w-on="click:refresh" w-disabled="checking">
+                    Обновить снимок
+                </button>
+                <span class="hint">
+                    Состояние читается по кнопке, а не опросом: канал
+                    обновлений без опроса — сценарий SC-16, он ещё не сделан.
+                </span>
+            </footer>
+
+            <p class="failure" w-if="failure">{{ failure }}</p>
         </main>
     </template>
 
