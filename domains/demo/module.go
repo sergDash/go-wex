@@ -45,6 +45,7 @@ type module struct {
 	disp    *jobs.Dispatcher
 	journal journal.Writer
 	running func() []string
+	events  *events.Scheduler
 
 	tcp   *listen.TCP
 	udp   *listen.UDP
@@ -54,12 +55,13 @@ type module struct {
 
 // New отдаёт модуль для списка в точке сборки. running называет службы,
 // которые подняло приложение: список собирается после регистрации модулей,
-// поэтому приходит функцией, а не значением.
-func New(disp *jobs.Dispatcher, j journal.Writer, running func() []string) core.Module {
+// поэтому приходит функцией, а не значением. events добавляет и показывает
+// события; в режиме подкоманды его нет.
+func New(disp *jobs.Dispatcher, j journal.Writer, running func() []string, ev *events.Scheduler) core.Module {
 	if j == nil {
 		j = journal.Discard{}
 	}
-	return &module{disp: disp, journal: j, running: running}
+	return &module{disp: disp, journal: j, running: running, events: ev}
 }
 
 func (*module) Name() string { return "demo" }
@@ -80,6 +82,8 @@ func (m *module) Register(r core.Registry) error {
 
 	r.HTTP("GET", "/api/demo", m.snapshot)
 	r.HTTP("GET", "/api/services", m.services)
+	r.HTTP("GET", "/api/events", m.eventsList)
+	r.HTTP("POST", "/api/events", m.addEvent)
 	r.HTTP("GET", "/api/demo/jobs", m.queue)
 	r.HTTP("POST", "/api/demo/jobs", m.enqueue)
 	r.HTTP("GET", "/api/demo/jobs/{id}", m.status)
@@ -240,6 +244,71 @@ func (m *module) enqueue(r *http.Request) (any, error) {
 		return nil, fmt.Errorf("demo: работа %s пропала после постановки", id)
 	}
 	return view(job, status)
+}
+
+// eventRow — строка таблицы событий для клиента.
+type eventRow struct {
+	ID       string     `json:"id"`
+	Kind     string     `json:"kind"`
+	Period   string     `json:"period"`
+	Next     *time.Time `json:"next"`
+	Declared bool       `json:"declared"`
+}
+
+// addEventBody — что присылает форма: текст работы и период в секундах.
+type addEventBody struct {
+	Text    string `json:"text"`
+	Seconds int    `json:"seconds"`
+}
+
+// eventsList отдаёт события: и объявленные кодом, и добавленные формой.
+func (m *module) eventsList(*http.Request) (any, error) {
+	if m.events == nil {
+		return []eventRow{}, nil
+	}
+
+	list, err := m.events.List()
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]eventRow, 0, len(list))
+	for _, e := range list {
+		rows = append(rows, eventRow{
+			ID:       e.ID,
+			Kind:     string(e.Kind),
+			Period:   e.Period.String(),
+			Next:     moment(e.Next),
+			Declared: e.Declared,
+		})
+	}
+	return rows, nil
+}
+
+// addEvent добавляет событие данными: раз в указанный период оно ставит
+// работу с этим текстом. Вид работ и класс модуль знает сам, форма их
+// не выбирает — иначе пришлось бы объяснять, что такое вид работ.
+func (m *module) addEvent(r *http.Request) (any, error) {
+	if m.events == nil {
+		return nil, &core.Error{Status: http.StatusServiceUnavailable, Message: "служба событий не поднята"}
+	}
+
+	var in addEventBody
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return nil, &core.Error{Status: http.StatusBadRequest, Message: "тело события: " + err.Error()}
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return nil, &core.Error{Status: http.StatusBadRequest, Message: "text обязателен"}
+	}
+	if in.Seconds < 1 || in.Seconds > 3600 {
+		return nil, &core.Error{Status: http.StatusBadRequest, Message: "seconds: целое от 1 до 3600"}
+	}
+
+	id, err := m.events.Add(kind, time.Duration(in.Seconds)*time.Second, jobs.ClassBackground, task{Text: in.Text})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"id": id}, nil
 }
 
 // queue отдаёт состояние очереди таблицей: новые работы сверху.

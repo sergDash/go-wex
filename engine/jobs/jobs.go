@@ -588,6 +588,13 @@ func (d *Dispatcher) Get(ctx context.Context, id string) (Job, string, bool, err
 	return d.queue.Get(ctx, id)
 }
 
+// Known сообщает, объявлен ли вид работ. События спрашивают это, когда их
+// добавляют данными: без обработчика работа оказалась бы без исполнителя.
+func (d *Dispatcher) Known(kind Kind) bool {
+	_, ok := d.reg.Spec(kind)
+	return ok
+}
+
 // List отдаёт все работы очереди по возрастанию номера: по нему строится
 // таблица состояния снаружи.
 func (d *Dispatcher) List(ctx context.Context) ([]Entry, error) {

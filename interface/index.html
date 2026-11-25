@@ -151,35 +151,43 @@
 
             <section class="block">
                 <h2 class="caption">
-                    Отложенное событие
+                    Отложенные события
                     <span class="engine">engine/events</span>
                 </h2>
                 <p class="note">
                     Иногда работу ставит не человек, а время: напоминание,
                     отчёт, уборка. Событие — это срок, по которому движок сам
-                    ставит работу; механизм называется <code>engine/events</code>.
-                    Здесь событие <code>demo.tick</code> раз в десять секунд
-                    добавляет работу в ту же очередь, что и кнопка выше.
-                    Срок лежит в хранилище: после перезапуска он продолжается,
-                    а пропущенные сроки дают одно срабатывание, а не вереницу
-                    догоняющих.
+                    ставит работу. Одно событие объявлено кодом
+                    (<code>demo.tick</code> раз в десять секунд), остальные
+                    можно добавить формой: текст работы и период в секундах.
+                    Срок лежит в хранилище, поэтому событие переживает
+                    перезапуск, а пропущенные сроки дают одно срабатывание.
                 </p>
-                <p class="fact">
-                    <span class="name">Вид</span>
-                    <span class="value">{{ demo.event.kind }}</span>
-                </p>
-                <p class="fact">
-                    <span class="name">Период</span>
-                    <span class="value">{{ demo.event.period }}</span>
-                </p>
-                <p class="fact">
-                    <span class="name">Срабатываний</span>
-                    <span class="value">{{ demo.event.fired }}</span>
-                </p>
-                <p class="note">
-                    Счётчик считает процесс: после перезапуска он начинается
-                    с нуля, а срок — нет.
-                </p>
+                <div class="line">
+                    <input class="input" w-bind="eventText" placeholder="текст работы">
+                    <input class="input period" w-bind="eventSeconds" type="number" min="1" max="3600">
+                    <button class="button" w-on="click:addEvent">Добавить событие</button>
+                </div>
+                <p class="label" w-if="events.length">События</p>
+                <table class="table" w-if="events.length">
+                    <thead>
+                        <tr>
+                            <th>Вид</th>
+                            <th>Период</th>
+                            <th>Сработает</th>
+                            <th>Источник</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr w-for="row in events traceby row.id">
+                            <td>{{ row.kind }}</td>
+                            <td>{{ row.period }}</td>
+                            <td>{{ row.next }}</td>
+                            <td>{{ row.source }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p class="note" w-if="!events.length">Событий нет.</p>
             </section>
 
             <footer class="actions">

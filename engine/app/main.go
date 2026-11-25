@@ -71,7 +71,7 @@ func runCommand(args []string) int {
 
 	// HTTP в режиме подкоманды не нужен: маршруты собираются в пустой приёмник.
 	reg := &registry{api: discardHTTP{}, jobs: jobReg, events: evReg, commands: commands}
-	for _, m := range moduleList(disp, journal.Discard{}, nil) {
+	for _, m := range moduleList(disp, journal.Discard{}, nil, nil) {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
 			return 1
@@ -151,8 +151,12 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	disp.SetJournal(jw)
 
 	// Виды отложенных событий собираются от модулей. Срок каждого вида
-	// лежит в том же хранилище, поэтому переживает перезапуск.
+	// лежит в том же хранилище, поэтому переживает перезапуск. Служба
+	// создаётся до регистрации: модули получают её, чтобы добавлять события.
 	evReg := events.NewRegistry()
+	evSched := events.NewScheduler(st, disp, evReg)
+	evSched.SetClock(clk)
+	evSched.SetJournal(jw)
 
 	// Расписание отвечает, какие классы допустимы при текущем простое;
 	// пока идёт запрос, фон из набора убирается.
@@ -180,7 +184,7 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		return serviceNames(services)
 	}
 
-	modules, err := selectModules(moduleList(disp, jw, running), cfg.Modules.Disabled)
+	modules, err := selectModules(moduleList(disp, jw, running, evSched), cfg.Modules.Disabled)
 	if err != nil {
 		log.Printf("настройки: %v", err)
 		return 1
@@ -201,10 +205,6 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	// и HTTP. При остановке порядок обратный: HTTP перестаёт принимать
 	// запросы, события перестают ставить работы, разборщик доигрывает срок,
 	// службы модулей и журнал закрываются после.
-	evSched := events.NewScheduler(st, disp, evReg)
-	evSched.SetClock(clk)
-	evSched.SetJournal(jw)
-
 	services = make([]service.Service, 0, 3+len(reg.services))
 	if journalSvc != nil {
 		services = append(services, journalSvc)
@@ -315,11 +315,11 @@ func moduleNames(modules []core.Module) []string {
 }
 
 // moduleList — единственное место, где приложение знает о модулях.
-func moduleList(disp *jobs.Dispatcher, jw journal.Writer, running func() []string) []core.Module {
+func moduleList(disp *jobs.Dispatcher, jw journal.Writer, running func() []string, ev *events.Scheduler) []core.Module {
 	return []core.Module{
 		health.New(),
 		tasks.New(disp),
-		demo.New(disp, jw, running),
+		demo.New(disp, jw, running, ev),
 	}
 }
 

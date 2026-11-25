@@ -9,6 +9,9 @@ package events
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -84,11 +87,16 @@ func (r *Registry) Kinds() []Kind {
 	return kinds
 }
 
-// state — запись события в хранилище: только срок следующего срабатывания.
-// Пересчитывать срок от времени запуска нельзя: фаза расписания потерялась бы
-// при каждом перезапуске.
-type state struct {
-	Next time.Time `json:"next"`
+// record — запись события в хранилище. У вида, объявленного кодом, номер
+// совпадает с видом и хранится только срок: период, класс и тело приходят
+// из правила, иначе правка кода не подействовала бы на старые записи.
+// У события, добавленного данными, хранится всё — другого источника у него нет.
+type record struct {
+	Kind    jobs.Kind       `json:"kind,omitempty"`
+	Period  time.Duration   `json:"period,omitempty"`
+	Class   jobs.Class      `json:"class,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	Next    time.Time       `json:"next"`
 }
 
 // collection — коллекция сроков в хранилище.
@@ -96,16 +104,29 @@ const collection = "events"
 
 // Enqueuer — постановка работы в очередь. Разборщик подходит целиком: он
 // проверяет, что вид объявлен, подставляет класс по умолчанию и будит себя
-// после постановки.
+// после постановки. Known нужен событиям, которые добавляют данными: вид
+// работ должен существовать, иначе работа окажется без обработчика.
 type Enqueuer interface {
 	Enqueue(ctx context.Context, kind jobs.Kind, payload any, class jobs.Class) (string, error)
+	Known(kind jobs.Kind) bool
 }
 
-// Firing — одно срабатывание: какой срок отработали и какая работа поставлена.
+// Firing — одно срабатывание: какое событие, какой срок и какая работа.
 type Firing struct {
+	ID    string
 	Kind  Kind
 	Due   time.Time
 	JobID string
+}
+
+// Event — событие для показа снаружи: вид, период, срок и откуда оно взялось.
+type Event struct {
+	ID       string
+	Kind     jobs.Kind
+	Period   time.Duration
+	Class    jobs.Class
+	Next     time.Time
+	Declared bool
 }
 
 // Scheduler — служба отложенных событий: по тикеру смотрит сроки, ставит
@@ -225,25 +246,28 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
-// Step делает один проход по видам: ставит работы тем, чей срок наступил,
-// и сдвигает срок. Ошибка одного вида не мешает остальным: она возвращается
-// вместе с итогом, чтобы попасть в журнал.
+// Step делает один проход: ставит работы событиям, чей срок наступил,
+// и сдвигает срок. Ошибка одного события не мешает остальным: она
+// возвращается вместе с итогом, чтобы попасть в журнал.
 func (s *Scheduler) Step(ctx context.Context, now time.Time) ([]Firing, error) {
+	records, err := s.records()
+	if err != nil {
+		return nil, err
+	}
+
 	var fired []Firing
 	var errs []error
 
+	// Виды, объявленные кодом: период, класс и тело берутся из правила,
+	// в хранилище лежит только срок.
 	for _, kind := range s.reg.Kinds() {
 		rule, ok := s.reg.Rule(kind)
 		if !ok {
 			continue
 		}
 
-		due, known, err := s.next(kind)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if !known {
+		rec, known := records[string(kind)]
+		if !known || rec.Next.IsZero() {
 			// Вид объявлен впервые: срок отсчитывается от текущего момента,
 			// иначе свежий проект сработал бы сразу на старте.
 			if err := s.setNext(kind, now.Add(rule.Period)); err != nil {
@@ -251,40 +275,81 @@ func (s *Scheduler) Step(ctx context.Context, now time.Time) ([]Firing, error) {
 			}
 			continue
 		}
-		if due.After(now) {
+		if rec.Next.After(now) {
 			continue
 		}
 
 		var payload any
 		if rule.Payload != nil {
-			payload = rule.Payload(due)
+			payload = rule.Payload(rec.Next)
 		}
 
-		// Порядок важен: сначала работа, затем срок. Обратный порядок при
-		// сбое между записями дал бы тихую потерю — срок сдвинут, работы нет.
-		// Цена прямого порядка записана в doc/capabilities/Недостатки.md:
-		// падение в этом окне даёт повторное срабатывание, но не потерю.
-		id, err := s.queue.Enqueue(ctx, jobs.Kind(kind), payload, rule.Class)
+		due := rec.Next
+		job, err := s.fire(ctx, string(kind), jobs.Kind(kind), payload, rule.Class, due)
 		if err != nil {
-			// Срок не двигаем: работу поставить не удалось, попытка повторится
-			// на следующем проходе с тем же сроком.
-			errs = append(errs, fmt.Errorf("события: вид %q: постановка: %w", kind, err))
+			errs = append(errs, err)
 			continue
 		}
-
 		if err := s.setNext(kind, advance(due, rule.Period, now)); err != nil {
 			errs = append(errs, err)
 		}
 
-		s.writeJournal("fired", map[string]any{
-			"kind": kind,
-			"due":  due,
-			"job":  id,
-		})
-		fired = append(fired, Firing{Kind: kind, Due: due, JobID: id})
+		fired = append(fired, Firing{ID: string(kind), Kind: kind, Due: due, JobID: job})
+	}
+
+	// События, добавленные данными: вид, период и тело лежат в записи.
+	// Ключ, совпавший с видом из кода, сюда не попадает — его разобрал
+	// проход выше.
+	for _, key := range sortedKeys(records) {
+		if _, declared := s.reg.Rule(Kind(key)); declared {
+			continue
+		}
+		rec := records[key]
+		if rec.Kind == "" || rec.Period <= 0 {
+			// Запись без вида — остаток прежней формы; пропускаем.
+			continue
+		}
+		if rec.Next.After(now) {
+			continue
+		}
+
+		job, err := s.fire(ctx, key, rec.Kind, rec.Payload, rec.Class, rec.Next)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		next := advance(rec.Next, rec.Period, now)
+		if err := s.advanceRecord(key, rec, next); err != nil {
+			errs = append(errs, err)
+		}
+
+		fired = append(fired, Firing{ID: key, Kind: Kind(rec.Kind), Due: rec.Next, JobID: job})
 	}
 
 	return fired, errors.Join(errs...)
+}
+
+// fire ставит работу и пишет срабатывание в журнал. Порядок важен: сначала
+// работа, затем срок. Обратный порядок при сбое между записями дал бы тихую
+// потерю — срок сдвинут, работы нет. Цена прямого порядка записана
+// в doc/capabilities/Недостатки.md: падение в этом окне даёт повторное
+// срабатывание, но не потерю.
+func (s *Scheduler) fire(ctx context.Context, id string, kind jobs.Kind, payload any, class jobs.Class, due time.Time) (string, error) {
+	job, err := s.queue.Enqueue(ctx, kind, payload, class)
+	if err != nil {
+		// Срок не двигаем: работу поставить не удалось, попытка повторится
+		// на следующем проходе с тем же сроком.
+		return "", fmt.Errorf("события: %q: постановка: %w", id, err)
+	}
+
+	s.writeJournal("fired", map[string]any{
+		"event": id,
+		"kind":  kind,
+		"due":   due,
+		"job":   job,
+	})
+	return job, nil
 }
 
 // advance — срок после срабатывания: первый из сроков, который ещё впереди.
@@ -295,23 +360,139 @@ func advance(due time.Time, period time.Duration, now time.Time) time.Time {
 	return due.Add((steps + 1) * period)
 }
 
-// next читает срок события. Отсутствие записи и нулевой срок считаются
-// одинаково: срок ещё не назначался.
-func (s *Scheduler) next(kind Kind) (time.Time, bool, error) {
-	var st state
-	ok, err := s.store.Get(collection, string(kind), &st)
-	if err != nil {
-		return time.Time{}, false, err
+// records читает все записи событий: и объявленные кодом, и добавленные
+// данными. Ключ — номер события; у вида из кода номер совпадает с видом.
+func (s *Scheduler) records() (map[string]record, error) {
+	keys := s.store.Keys(collection)
+	out := make(map[string]record, len(keys))
+	for _, key := range keys {
+		var rec record
+		ok, err := s.store.Get(collection, key, &rec)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out[key] = rec
+		}
 	}
-	if !ok || st.Next.IsZero() {
-		return time.Time{}, false, nil
-	}
-	return st.Next, true, nil
+	return out, nil
 }
 
-// setNext записывает срок следующего срабатывания.
+// setNext записывает срок вида, объявленного кодом: остальные поля записи
+// приходят из правила, поэтому хранить их незачем.
 func (s *Scheduler) setNext(kind Kind, at time.Time) error {
-	return s.store.Put(collection, string(kind), state{Next: at})
+	return s.store.Put(collection, string(kind), record{Next: at})
+}
+
+// advanceRecord сдвигает срок события, добавленного данными, сохраняя его
+// вид, период, класс и тело.
+func (s *Scheduler) advanceRecord(key string, rec record, next time.Time) error {
+	rec.Next = next
+	return s.store.Put(collection, key, rec)
+}
+
+// sortedKeys — ключи записей по возрастанию: обход не зависит от порядка
+// карты, и срабатывания за один проход идут предсказуемо.
+func sortedKeys(records map[string]record) []string {
+	keys := make([]string, 0, len(records))
+	for key := range records {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Add объявляет событие во время работы: вид работ, период, класс и тело.
+// Запись уходит в хранилище, поэтому событие переживает перезапуск; срок
+// отсчитывается от текущего момента, и только что добавленное событие
+// не срабатывает сразу.
+func (s *Scheduler) Add(kind jobs.Kind, period time.Duration, class jobs.Class, payload any) (string, error) {
+	if period <= 0 {
+		return "", errors.New("события: период должен быть больше нуля")
+	}
+	if class != "" && !class.Valid() {
+		return "", fmt.Errorf("события: неизвестный класс %q", class)
+	}
+	if !s.queue.Known(kind) {
+		return "", fmt.Errorf("события: вид работ %q не объявлен", kind)
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("события: тело: %w", err)
+	}
+
+	id, err := s.newID()
+	if err != nil {
+		return "", err
+	}
+
+	rec := record{
+		Kind:    kind,
+		Period:  period,
+		Class:   class,
+		Payload: raw,
+		Next:    s.clock.Now().Add(period),
+	}
+	if err := s.store.Put(collection, id, rec); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// newID — номер события: восемь шестнадцатеричных знаков. Счётчик не нужен:
+// события добавляют редко, а совпадение проверяется по хранилищу.
+func (s *Scheduler) newID() (string, error) {
+	for i := 0; i < 5; i++ {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return "", fmt.Errorf("события: номер: %w", err)
+		}
+		id := hex.EncodeToString(b[:])
+
+		var rec record
+		ok, err := s.store.Get(collection, id, &rec)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return id, nil
+		}
+	}
+	return "", errors.New("события: не удалось подобрать номер")
+}
+
+// List отдаёт события в порядке срока: сначала те, что сработают раньше.
+func (s *Scheduler) List() ([]Event, error) {
+	records, err := s.records()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Event, 0, len(records)+len(s.reg.Kinds()))
+	for _, kind := range s.reg.Kinds() {
+		rule, ok := s.reg.Rule(kind)
+		if !ok {
+			continue
+		}
+		ev := Event{ID: string(kind), Kind: jobs.Kind(kind), Period: rule.Period, Class: rule.Class, Declared: true}
+		if rec, known := records[string(kind)]; known {
+			ev.Next = rec.Next
+		}
+		out = append(out, ev)
+	}
+	for key, rec := range records {
+		if _, declared := s.reg.Rule(Kind(key)); declared {
+			continue
+		}
+		if rec.Kind == "" || rec.Period <= 0 {
+			continue
+		}
+		out = append(out, Event{ID: key, Kind: rec.Kind, Period: rec.Period, Class: rec.Class, Next: rec.Next})
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Next.Before(out[j].Next) })
+	return out, nil
 }
 
 // writeJournal пишет событие и не мешает обходу, если журнал недоступен.

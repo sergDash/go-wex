@@ -20,6 +20,9 @@ $(function () {
         },
         jobs: [],
         services: [],
+        events: [],
+        eventText: 'напоминание',
+        eventSeconds: 10,
         text: 'раз',
         failure: ''
     });
@@ -72,6 +75,27 @@ $(function () {
         });
     }
 
+    // eventState приводит событие к полям стейта: период и срок показываются
+    // готовыми строками, а источник называется словом.
+    function eventState(row) {
+        return {
+            id: row.id,
+            kind: row.kind,
+            period: row.period,
+            next: momentText(row.next, '—'),
+            source: row.declared ? 'код' : 'данные'
+        };
+    }
+
+    // loadEvents перечитывает список событий: и объявленных кодом, и
+    // добавленных формой.
+    function loadEvents(state) {
+        return call('/api/events').then(function (rows) {
+            state.events = rows.map(eventState);
+            state.failure = '';
+        });
+    }
+
     // loadJobs перечитывает очередь целиком. Строки идут сверху вниз
     // в том порядке, который отдал сервер: он ставит новые работы первыми.
     function loadJobs(state) {
@@ -92,13 +116,15 @@ $(function () {
             call('/api/health'),
             call('/api/demo'),
             call('/api/demo/jobs'),
-            call('/api/services')
+            call('/api/services'),
+            call('/api/events')
         ])
             .then(function (values) {
                 const health = values[0];
                 const demo = values[1];
                 const rows = values[2];
                 const services = values[3];
+                const events = values[4];
 
                 state.checking = false;
                 state.ok = health.ok;
@@ -106,6 +132,7 @@ $(function () {
                 state.demo = demo;
                 state.jobs = rows.map(rowState);
                 state.services = services;
+                state.events = events.map(eventState);
                 state.failure = '';
             })
             .catch(function (error) {
@@ -134,6 +161,31 @@ $(function () {
                     state.checking = false;
                     state.ok = false;
                     state.status = 'сервер не ответил: ' + error.message;
+                });
+        };
+    });
+
+    // addEvent заводит событие данными: период и текст работы. Сразу после
+    // добавления обновляются и события, и очередь — событие пока не сработало,
+    // но строка в таблице должна появиться.
+    view.method('addEvent', function (state) {
+        return function () {
+            call('/api/events', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: state.eventText,
+                    seconds: Number(state.eventSeconds)
+                })
+            })
+                .then(function () {
+                    return loadEvents(state);
+                })
+                .then(function () {
+                    return loadJobs(state);
+                })
+                .catch(function (error) {
+                    state.failure = error.message;
                 });
         };
     });

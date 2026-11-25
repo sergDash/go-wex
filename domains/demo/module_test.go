@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"go-wex/engine/journal"
 	"go-wex/engine/listen"
 	"go-wex/engine/service"
+	"go-wex/engine/store"
 )
 
 // testRegistry — реестр для проверки объявлений модуля: запоминает всё,
@@ -62,13 +64,15 @@ func (r *testRegistry) Command(name string, h core.CommandHandler) error {
 // TestRegister — модуль объявляет маршруты, работу, три службы и подкоманду.
 func TestRegister(t *testing.T) {
 	reg := newTestRegistry()
-	if err := New(nil, nil, nil).Register(reg); err != nil {
+	if err := New(nil, nil, nil, nil).Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	for _, key := range []string{
 		"GET /api/demo",
 		"GET /api/services",
+		"GET /api/events",
+		"POST /api/events",
 		"GET /api/demo/jobs",
 		"POST /api/demo/jobs",
 		"GET /api/demo/jobs/{id}",
@@ -182,6 +186,72 @@ func TestServices(t *testing.T) {
 	}
 	if names, ok := empty.([]string); !ok || len(names) != 0 {
 		t.Fatalf("пустой список: %+v", empty)
+	}
+}
+
+// newEventScheduler собирает службу событий на временном хранилище.
+func newEventScheduler(t *testing.T, d *jobs.Dispatcher) *events.Scheduler {
+	t.Helper()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "store.json"), nil)
+	if err != nil {
+		t.Fatalf("хранилище: %v", err)
+	}
+	return events.NewScheduler(st, d, events.NewRegistry())
+}
+
+// TestAddAndListEvents — форма добавляет событие, а список показывает его
+// вместе с видом, объявленным кодом.
+func TestAddAndListEvents(t *testing.T) {
+	jobReg := jobs.NewRegistry()
+	if err := jobReg.Add(kind, jobs.Spec{Class: jobs.ClassBackground, Handler: (&module{}).run}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
+	m := &module{disp: d, journal: journal.Discard{}, events: newEventScheduler(t, d)}
+
+	value, err := m.addEvent(httptest.NewRequest(http.MethodPost, "/api/events",
+		strings.NewReader(`{"text":"раз","seconds":5}`)))
+	if err != nil {
+		t.Fatalf("addEvent: %v", err)
+	}
+	if id := value.(map[string]string)["id"]; len(id) != 8 {
+		t.Fatalf("номер события: %q", id)
+	}
+
+	value, err = m.eventsList(httptest.NewRequest(http.MethodGet, "/api/events", nil))
+	if err != nil {
+		t.Fatalf("eventsList: %v", err)
+	}
+	rows := value.([]eventRow)
+	if len(rows) != 1 {
+		t.Fatalf("событий %d, ожидалось 1", len(rows))
+	}
+	row := rows[0]
+	if row.Kind != string(kind) || row.Period != "5s" || row.Declared || row.Next == nil {
+		t.Fatalf("строка события: %+v", row)
+	}
+}
+
+// TestEventValidation — пустой текст и период вне границ дают ответ 400.
+func TestEventValidation(t *testing.T) {
+	jobReg := jobs.NewRegistry()
+	if err := jobReg.Add(kind, jobs.Spec{Class: jobs.ClassBackground, Handler: (&module{}).run}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
+	m := &module{journal: journal.Discard{}, events: newEventScheduler(t, d)}
+
+	for _, body := range []string{
+		`{"text":"  ","seconds":5}`,
+		`{"text":"раз","seconds":0}`,
+		`{"text":"раз","seconds":3601}`,
+	} {
+		_, err := m.addEvent(httptest.NewRequest(http.MethodPost, "/api/events", strings.NewReader(body)))
+		var e *core.Error
+		if err == nil || !errors.As(err, &e) || e.Status != http.StatusBadRequest {
+			t.Fatalf("тело %s: ошибка %v", body, err)
+		}
 	}
 }
 

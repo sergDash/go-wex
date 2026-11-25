@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"go-wex/engine/clock"
 	"go-wex/engine/jobs"
 	"go-wex/engine/store"
 )
@@ -30,6 +32,7 @@ type recorder struct {
 	mu    sync.Mutex
 	calls []recorded
 	fail  error
+	known map[jobs.Kind]bool
 }
 
 func (r *recorder) Enqueue(_ context.Context, kind jobs.Kind, payload any, class jobs.Class) (string, error) {
@@ -41,6 +44,18 @@ func (r *recorder) Enqueue(_ context.Context, kind jobs.Kind, payload any, class
 	}
 	r.calls = append(r.calls, recorded{kind: kind, payload: payload, class: class})
 	return fmt.Sprintf("job-%d", len(r.calls)), nil
+}
+
+// Known по умолчанию считает известными все виды: проверки, которым вид
+// работ безразличен, не должны перечислять его отдельно.
+func (r *recorder) Known(kind jobs.Kind) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.known == nil {
+		return true
+	}
+	return r.known[kind]
 }
 
 func (r *recorder) count() int {
@@ -70,7 +85,7 @@ func openStore(t *testing.T, path string) *store.Store {
 func nextAt(t *testing.T, st *store.Store, kind Kind) time.Time {
 	t.Helper()
 
-	var s state
+	var s record
 	ok, err := st.Get(collection, string(kind), &s)
 	if err != nil {
 		t.Fatalf("чтение срока %q: %v", kind, err)
@@ -336,6 +351,112 @@ func TestRegistryRejects(t *testing.T) {
 		if err := reg.Add(c.kind, c.rule); err == nil {
 			t.Fatalf("%s: объявление принято, ожидался отказ", c.name)
 		}
+	}
+}
+
+// TestAddFiresAndPersists — событие, добавленное данными, ставит работу по
+// сроку, а его запись переживает перезапуск: срок и тело лежат в хранилище.
+func TestAddFiresAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.json")
+	reg := NewRegistry()
+	if err := reg.Add("tick", Rule{Period: time.Hour}); err != nil {
+		t.Fatalf("объявление вида: %v", err)
+	}
+	rec := &recorder{}
+	s := NewScheduler(openStore(t, path), rec, reg)
+	s.SetClock(clock.NewManual(base))
+
+	id, err := s.Add("beat", 10*time.Second, jobs.ClassBackground, map[string]string{"text": "раз"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if len(id) != 8 {
+		t.Fatalf("номер события %q, ожидались восемь знаков", id)
+	}
+
+	// До срока тишина: только что добавленное событие не срабатывает сразу.
+	fired, err := s.Step(context.Background(), base)
+	if err != nil {
+		t.Fatalf("шаг до срока: %v", err)
+	}
+	if len(fired) != 0 {
+		t.Fatalf("до срока срабатываний %d, ожидалось 0", len(fired))
+	}
+
+	fired, err = s.Step(context.Background(), base.Add(10*time.Second))
+	if err != nil {
+		t.Fatalf("шаг в срок: %v", err)
+	}
+	if len(fired) != 1 || fired[0].ID != id || fired[0].Kind != Kind("beat") {
+		t.Fatalf("срабатывание: %+v", fired)
+	}
+	call := rec.call(0)
+	if call.kind != "beat" {
+		t.Fatalf("поставлен вид %q", call.kind)
+	}
+	if len(call.payload.(json.RawMessage)) == 0 || string(call.payload.(json.RawMessage)) != `{"text":"раз"}` {
+		t.Fatalf("тело: %s", call.payload)
+	}
+
+	// Перезапуск: запись осталась, срок продолжается, а не начинается заново.
+	s2 := NewScheduler(openStore(t, path), rec, reg)
+	fired, err = s2.Step(context.Background(), base.Add(20*time.Second))
+	if err != nil {
+		t.Fatalf("шаг после перезапуска: %v", err)
+	}
+	if len(fired) != 1 || fired[0].ID != id {
+		t.Fatalf("после перезапуска: %+v", fired)
+	}
+}
+
+// TestAddValidation — добавление проверяет период, класс и вид работ:
+// событие без обработчика работу бы не нашло.
+func TestAddValidation(t *testing.T) {
+	reg := NewRegistry()
+	rec := &recorder{known: map[jobs.Kind]bool{}}
+	s, _ := newScheduler(t, reg, rec)
+
+	if _, err := s.Add("beat", 0, jobs.ClassBackground, nil); err == nil {
+		t.Fatal("нулевой период принят")
+	}
+	if _, err := s.Add("beat", time.Second, "fast", nil); err == nil {
+		t.Fatal("неизвестный класс принят")
+	}
+	if _, err := s.Add("beat", time.Second, jobs.ClassBackground, nil); err == nil {
+		t.Fatal("необъявленный вид работ принят")
+	}
+}
+
+// TestList — список отдаёт и виды из кода, и добавленные данными, в порядке
+// срока, и помечает, откуда взялось событие.
+func TestList(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("tick", Rule{Period: time.Hour}); err != nil {
+		t.Fatalf("объявление вида: %v", err)
+	}
+	rec := &recorder{}
+	s, _ := newScheduler(t, reg, rec)
+	s.SetClock(clock.NewManual(base))
+
+	if _, err := s.Step(context.Background(), base); err != nil {
+		t.Fatalf("первый шаг: %v", err)
+	}
+	if _, err := s.Add("beat", 10*time.Second, jobs.ClassBackground, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	list, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("событий %d, ожидалось 2", len(list))
+	}
+	if list[0].Kind != "beat" || list[0].Declared {
+		t.Fatalf("первое событие: %+v", list[0])
+	}
+	if list[1].Kind != "tick" || !list[1].Declared || list[1].Period != time.Hour {
+		t.Fatalf("второе событие: %+v", list[1])
 	}
 }
 
