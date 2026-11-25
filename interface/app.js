@@ -286,16 +286,24 @@ $(function () {
             var select = state.selects[name];
 
             if (name === 'tags') {
-                var index = select.value.indexOf(value);
+                var picked = select.value;
+                var next = [];
+                var found = false;
 
-                if (index >= 0) {
-                    select.value.splice(index, 1);
-                } else {
-                    select.value.push(value);
+                for (var i = 0; i < picked.length; i++) {
+                    if (picked[i] === value) {
+                        found = true;
+                    } else {
+                        next.push(picked[i]);
+                    }
                 }
-                // Массив меняется на месте: прокси не видит замену элементов,
-                // поэтому перерисовку просим явно.
-                this.update();
+                if (!found) {
+                    next.push(value);
+                }
+
+                // Новый массив вместо splice: прокси видит замену значения,
+                // и снятые пункты теряют подсветку.
+                select.value = next;
                 return;
             }
 
@@ -351,6 +359,20 @@ $(function () {
     // документированное место для начальной загрузки данных.
     view.on('$mount', function (state) {
         snapshot(state);
+    });
+
+    // Клик вне списка закрывает открытые. Слушатель на документе, потому что
+    // списки разбросаны по странице; клик внутри списка пропускается,
+    // иначе он закрыл бы тот список, в котором выбирают.
+    document.addEventListener('click', function (event) {
+        if (event.target.closest('.select')) {
+            return;
+        }
+        view.update(function (state) {
+            for (var key in state.selects) {
+                state.selects[key].open = false;
+            }
+        });
     });
 
     view.mount();

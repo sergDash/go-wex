@@ -6,6 +6,10 @@
     блоки. Общие свойства собраны в миксины, чтобы одинаковые поверхности
     и строки не расходились по файлу.
 
+    Отступы задаются через gap: панель, секции, строки и списки — сетки
+    или flex-контейнеры. margin в макете не используется; сброс margin: 0
+    у body остаётся, это не отступ между блоками.
+
     Цвета — переменные Less. В разметке и JS конкретных цветов нет.
 */
 
@@ -43,6 +47,7 @@
 
 // Кнопка: та же рамка, что у поверхностей, и подсветка при наведении.
 .button() {
+    box-sizing: border-box;
     padding: 8px 14px;
     border: 1px solid @border;
     border-radius: 8px;
@@ -63,6 +68,7 @@
 }
 
 body {
+    // Сброс отступа браузера, а не отступ между блоками.
     margin: 0;
     min-height: 100vh;
     display: grid;
@@ -78,24 +84,33 @@ body {
 .panel {
     .surface();
 
+    display: grid;
+    gap: 20px;
+    align-content: start;
     width: 100%;
     max-width: 760px;
     padding: 32px;
 
+    // Шапка: заголовок и вводный абзац.
+    .head {
+        display: grid;
+        gap: 12px;
+    }
+
     .title {
-        margin: 0 0 12px;
         font-size: 24px;
         font-weight: 600;
     }
 
     .lead {
-        margin: 0 0 24px;
         color: @text-muted;
     }
 
     // Секция возможности: отделена линией от предыдущей.
     .block {
-        margin-top: 24px;
+        display: grid;
+        gap: 12px;
+        align-content: start;
         padding-top: 20px;
         border-top: 1px solid @border;
     }
@@ -104,7 +119,6 @@ body {
         .row(12px);
 
         justify-content: space-between;
-        margin: 0 0 8px;
         font-size: 18px;
         font-weight: 600;
     }
@@ -125,27 +139,8 @@ body {
     }
 
     .note {
-        margin: 0 0 12px;
         color: @text-muted;
         font-size: 14px;
-    }
-
-    // Строка «имя — значение»: имя постоянной ширины, значение переносится.
-    .fact {
-        .row(12px);
-
-        margin: 4px 0;
-        font-size: 14px;
-
-        .name {
-            min-width: 140px;
-            color: @text-muted;
-        }
-
-        .value {
-            font-family: ui-monospace, "SFMono-Regular", monospace;
-            overflow-wrap: anywhere;
-        }
     }
 
     .line {
@@ -153,6 +148,7 @@ body {
     }
 
     .input {
+        box-sizing: border-box;
         flex: 1;
         padding: 8px 10px;
         border: 1px solid @border;
@@ -213,12 +209,12 @@ body {
 
         .options {
             position: absolute;
-            top: 100%;
+            // Отступ от поля задаётся положением, а не margin.
+            top: calc(100% + 4px);
             left: 0;
             z-index: 3;
             width: 100%;
             max-height: 240px;
-            margin-top: 4px;
             overflow: auto;
             border: 1px solid @border;
             border-radius: 8px;
@@ -241,25 +237,26 @@ body {
             }
 
             .search {
+                display: grid;
+                gap: 6px;
                 padding: 6px;
 
                 .input {
+                    flex: none;
                     width: 100%;
                 }
             }
         }
     }
 
-    // Строка удаления: отступ от таблицы и ширина по всей панели,
-    // кнопка прижата к правому краю.
+    // Строка удаления: ширина по всей панели, элементы разнесены по краям,
+    // промежутки задаёт gap.
     .deletebar {
-        .row(12px);
-
-        margin-top: 12px;
-
-        .button {
-            margin-left: auto;
-        }
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
     }
 
     // Ширины списков в конкретных местах.
@@ -283,7 +280,6 @@ body {
     // не растягивала страницу, и чтобы макет не ездил при обновлениях.
     .scroll {
         height: 320px;
-        margin: 12px 0;
         overflow: auto;
         scrollbar-width: thin;
         scrollbar-color: @border transparent;
@@ -335,7 +331,6 @@ body {
     .actions {
         .row(12px);
 
-        margin-top: 24px;
         padding-top: 20px;
         border-top: 1px solid @border;
         flex-wrap: wrap;
@@ -347,14 +342,13 @@ body {
     }
 
     .failure {
-        margin: 12px 0 0;
         color: @error;
         font-size: 14px;
     }
 
     // Список служб: имя в порядке запуска, моноширинно, по строке.
     .services {
-        margin: 8px 0 0;
+        display: grid;
         padding: 0;
         list-style: none;
         font-family: ui-monospace, "SFMono-Regular", monospace;
@@ -368,7 +362,6 @@ body {
 
     // Подпись над таблицей: объясняет, что окно ограничено по высоте.
     .label {
-        margin: 12px 0 0;
         color: @text-muted;
         font-size: 12px;
         letter-spacing: 0.06em;
@@ -386,7 +379,6 @@ body {
     .status {
         .row();
 
-        margin: 0;
         color: @text-muted;
 
         .dot {
