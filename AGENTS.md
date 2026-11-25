@@ -40,7 +40,7 @@ go test ./...
 | Путь | Назначение |
 |---|---|
 | `bin/` | собранные бинарники, в git не попадают |
-| `engine/` | движок: `app/`, `config/`, `core/`, `service/`, `jobs/`, `store/`, `clock/`, `schedule/`, `activity/`, `journal/`, `listen/`, `process/`, `httpapi/` |
+| `engine/` | движок: `app/`, `config/`, `core/`, `service/`, `jobs/`, `events/`, `store/`, `clock/`, `schedule/`, `activity/`, `journal/`, `listen/`, `process/`, `httpapi/` |
 | `engine/app/` | точка сборки: настройки, список модулей, запуск |
 | `config/` | настройки приложения: адрес, интерфейс, хранилище, пороги, журнал |
 | `domains/` | модули предметной области |
