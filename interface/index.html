@@ -29,18 +29,17 @@
             <header class="head" w-static>
                 <h1 class="title">Движок go + wex: панель демо</h1>
                 <p class="lead">
-                    Каждая секция показывает одну возможность движка.
-                    Пояснение говорит, что происходит и что нажать, чтобы
-                    это увидеть. Номер рядом с заголовком — сценарий из
-                    <code>doc/capabilities/scenarios.md</code>; полный текст
-                    лежит там, здесь только подпись.
+                    Каждая секция показывает один механизм движка: рядом
+                    с заголовком — имя пакета, который за него отвечает.
+                    Пояснение говорит, зачем механизм придуман и что нажать,
+                    чтобы увидеть его в работе.
                 </p>
             </header>
 
             <section class="block">
                 <h2 class="caption">
                     Связь с сервером
-                    <span class="scenario">SC-05</span>
+                    <span class="engine">engine/httpapi</span>
                 </h2>
                 <p class="note">
                     Самое простое, что умеет приложение: ответить на запрос.
@@ -60,7 +59,7 @@
             <section class="block">
                 <h2 class="caption">
                     Службы
-                    <span class="scenario">SC-05</span>
+                    <span class="engine">engine/service</span>
                 </h2>
                 <p class="note">
                     Служба — часть приложения, которая живёт всё время работы:
@@ -79,7 +78,7 @@
             <section class="block">
                 <h2 class="caption">
                     Работа в очереди
-                    <span class="scenario">SC-08</span>
+                    <span class="engine">engine/jobs</span>
                 </h2>
                 <p class="note">
                     Долгую работу не делают внутри ответа: клиент ждал бы,
@@ -128,7 +127,7 @@
             <section class="block">
                 <h2 class="caption">
                     Отложенное событие
-                    <span class="scenario">SC-10</span>
+                    <span class="engine">engine/events</span>
                 </h2>
                 <p class="note">
                     Иногда работу ставит не человек, а время: напоминание,
