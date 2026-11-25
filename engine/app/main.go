@@ -22,6 +22,7 @@ import (
 	"go-wex/engine/clock"
 	"go-wex/engine/config"
 	"go-wex/engine/core"
+	"go-wex/engine/events"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
@@ -62,9 +63,10 @@ func runCommand(args []string) int {
 	jobReg := jobs.NewRegistry()
 	disp := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
 	commands := process.NewRegistry()
+	evReg := events.NewRegistry()
 
 	// HTTP в режиме подкоманды не нужен: маршруты собираются в пустой приёмник.
-	reg := &registry{api: discardHTTP{}, jobs: jobReg, commands: commands}
+	reg := &registry{api: discardHTTP{}, jobs: jobReg, events: evReg, commands: commands}
 	for _, m := range moduleList(disp, journal.Discard{}) {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
@@ -144,6 +146,10 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	disp.SetClock(clk)
 	disp.SetJournal(jw)
 
+	// Виды отложенных событий собираются от модулей. Срок каждого вида
+	// лежит в том же хранилище, поэтому переживает перезапуск.
+	evReg := events.NewRegistry()
+
 	// Расписание отвечает, какие классы допустимы при текущем простое;
 	// пока идёт запрос, фон из набора убирается.
 	rules, err := scheduleRules(cfg.Schedule.Rules)
@@ -161,7 +167,7 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	})
 
 	commands := process.NewRegistry()
-	reg := &registry{api: srv, jobs: jobReg, commands: commands}
+	reg := &registry{api: srv, jobs: jobReg, events: evReg, commands: commands}
 	for _, m := range moduleList(disp, jw) {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
@@ -170,15 +176,20 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		log.Printf("модуль: %s", m.Name())
 	}
 
-	// Журнал открывается первым, затем службы модулей, разборщик и HTTP.
-	// При остановке порядок обратный: HTTP перестаёт принимать запросы,
-	// разборщик доигрывает срок, службы модулей и журнал закрываются после.
-	services := make([]service.Service, 0, 2+len(reg.services))
+	// Журнал открывается первым, затем службы модулей, разборщик, события
+	// и HTTP. При остановке порядок обратный: HTTP перестаёт принимать
+	// запросы, события перестают ставить работы, разборщик доигрывает срок,
+	// службы модулей и журнал закрываются после.
+	evSched := events.NewScheduler(st, disp, evReg)
+	evSched.SetClock(clk)
+	evSched.SetJournal(jw)
+
+	services := make([]service.Service, 0, 3+len(reg.services))
 	if journalSvc != nil {
 		services = append(services, journalSvc)
 	}
 	services = append(services, reg.services...)
-	services = append(services, disp, srv)
+	services = append(services, disp, evSched, srv)
 	group := service.New(services...)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -246,11 +257,12 @@ type discardHTTP struct{}
 func (discardHTTP) HTTP(string, string, core.Handler) {}
 
 // registry собирает возможности модуля: маршруты уходят HTTP-службе,
-// виды работ — реестру работ, службы — в общий список запуска,
-// подкоманды — реестру режимов.
+// виды работ — реестру работ, сроки событий — реестру событий, службы —
+// в общий список запуска, подкоманды — реестру режимов.
 type registry struct {
 	api      httpRegistrar
 	jobs     *jobs.Registry
+	events   *events.Registry
 	commands *process.Registry
 	services []service.Service
 }
@@ -261,6 +273,10 @@ func (r *registry) HTTP(method, path string, h core.Handler) {
 
 func (r *registry) Job(kind string, spec jobs.Spec) error {
 	return r.jobs.Add(jobs.Kind(kind), spec)
+}
+
+func (r *registry) Event(kind string, rule events.Rule) error {
+	return r.events.Add(events.Kind(kind), rule)
 }
 
 func (r *registry) Service(s service.Service) {

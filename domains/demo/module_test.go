@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go-wex/engine/core"
+	"go-wex/engine/events"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
 	"go-wex/engine/listen"
@@ -21,6 +22,7 @@ import (
 type testRegistry struct {
 	routes   map[string]core.Handler
 	specs    map[jobs.Kind]jobs.Spec
+	events   map[events.Kind]events.Rule
 	services []service.Service
 	commands map[string]core.CommandHandler
 }
@@ -29,6 +31,7 @@ func newTestRegistry() *testRegistry {
 	return &testRegistry{
 		routes:   map[string]core.Handler{},
 		specs:    map[jobs.Kind]jobs.Spec{},
+		events:   map[events.Kind]events.Rule{},
 		commands: map[string]core.CommandHandler{},
 	}
 }
@@ -39,6 +42,11 @@ func (r *testRegistry) HTTP(method, path string, h core.Handler) {
 
 func (r *testRegistry) Job(kind string, spec jobs.Spec) error {
 	r.specs[jobs.Kind(kind)] = spec
+	return nil
+}
+
+func (r *testRegistry) Event(kind string, rule events.Rule) error {
+	r.events[events.Kind(kind)] = rule
 	return nil
 }
 
@@ -69,6 +77,12 @@ func TestRegister(t *testing.T) {
 	}
 	if spec, ok := reg.specs[kind]; !ok || spec.Handler == nil || spec.Class != jobs.ClassBackground {
 		t.Fatalf("вид работы: %+v", spec)
+	}
+	if spec, ok := reg.specs[eventKind]; !ok || spec.Handler == nil {
+		t.Fatalf("вид работы события: %+v", spec)
+	}
+	if rule, ok := reg.events[events.Kind(eventKind)]; !ok || rule.Period != tickPeriod || rule.Payload == nil {
+		t.Fatalf("отложенное событие: %+v", rule)
 	}
 	if len(reg.services) != 3 {
 		t.Fatalf("служб: %d", len(reg.services))
@@ -143,5 +157,23 @@ func TestEnqueueValidation(t *testing.T) {
 	var e *core.Error
 	if err == nil || !errors.As(err, &e) || e.Status != http.StatusBadRequest {
 		t.Fatalf("ошибка: %v", err)
+	}
+}
+
+// TestTick — событие отмечает срабатывание и показывает его в снимке.
+func TestTick(t *testing.T) {
+	m := &module{journal: journal.Discard{}}
+	job := jobs.Job{ID: "1", Kind: eventKind, Payload: []byte(`{"due":"2026-11-25T12:00:00Z"}`)}
+
+	if err := m.tick(context.Background(), job); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := m.ticks.Load(); got != 1 {
+		t.Fatalf("срабатываний %d, ожидалось 1", got)
+	}
+
+	view := m.event()
+	if view.Kind != string(eventKind) || view.Period != tickPeriod.String() || view.Fired != 1 {
+		t.Fatalf("снимок события: %+v", view)
 	}
 }

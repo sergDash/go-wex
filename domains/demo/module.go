@@ -15,14 +15,26 @@ import (
 	"time"
 
 	"go-wex/engine/core"
+	"go-wex/engine/events"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
 	"go-wex/engine/listen"
 	"go-wex/engine/process"
 )
 
-// kind — вид работы; класс фоновый, поэтому она ждёт простоя.
-const kind = jobs.Kind("demo.echo")
+const (
+	// kind — вид работы для ручной постановки; класс фоновый, поэтому
+	// она ждёт простоя.
+	kind = jobs.Kind("demo.echo")
+
+	// eventKind — вид отложенного события. Работа та же очередь, но срок
+	// приходит не из запроса, а от службы событий.
+	eventKind = jobs.Kind("demo.tick")
+
+	// tickPeriod — период демонстрационного события: десять секунд, чтобы
+	// срабатывание было видно без долгого ожидания.
+	tickPeriod = 10 * time.Second
+)
 
 // module — демонстрационный модуль.
 type module struct {
@@ -32,6 +44,7 @@ type module struct {
 	tcp   *listen.TCP
 	udp   *listen.UDP
 	lines atomic.Int64
+	ticks atomic.Int64
 }
 
 // New отдаёт модуль для списка в точке сборки.
@@ -70,22 +83,56 @@ func (m *module) Register(r core.Registry) error {
 	}); err != nil {
 		return err
 	}
+
+	// Событие ставит работу в ту же очередь: срок лежит в хранилище
+	// и переживает перезапуск, а когда работу взять, решает расписание.
+	if err := r.Job(string(eventKind), jobs.Spec{
+		Class:       jobs.ClassBackground,
+		Handler:     m.tick,
+		MaxAttempts: 1,
+	}); err != nil {
+		return err
+	}
+	if err := r.Event(string(eventKind), events.Rule{
+		Class:  jobs.ClassBackground,
+		Period: tickPeriod,
+		Payload: func(due time.Time) any {
+			return tick{Due: due.Format(time.RFC3339)}
+		},
+	}); err != nil {
+		return err
+	}
 	return r.Command("demo", m.command)
 }
 
-// snapshot — что модуль объявил и сколько строк приняли слушатели.
+// snapshot — что модуль объявил, сколько строк приняли слушатели и сколько
+// раз сработало отложенное событие.
 type snapshot struct {
-	TCP     string `json:"tcp"`
-	UDP     string `json:"udp"`
-	Lines   int64  `json:"lines"`
-	Job     string `json:"job"`
-	Command string `json:"command"`
+	TCP     string    `json:"tcp"`
+	UDP     string    `json:"udp"`
+	Lines   int64     `json:"lines"`
+	Job     string    `json:"job"`
+	Event   eventView `json:"event"`
+	Command string    `json:"command"`
+}
+
+// eventView — отложенное событие для клиента: вид, период и число
+// срабатываний, которые модуль увидел у себя.
+type eventView struct {
+	Kind   string `json:"kind"`
+	Period string `json:"period"`
+	Fired  int64  `json:"fired"`
 }
 
 // task — тело демонстрационной работы.
 type task struct {
 	Text      string `json:"text"`
 	FailUntil int    `json:"failUntil"`
+}
+
+// tick — тело отложенного события: момент, за который оно сработало.
+type tick struct {
+	Due string `json:"due"`
 }
 
 // jobView — состояние работы для клиента.
@@ -102,6 +149,7 @@ func (m *module) snapshot(*http.Request) (any, error) {
 		UDP:     m.udp.Addr(),
 		Lines:   m.lines.Load(),
 		Job:     string(kind),
+		Event:   m.event(),
 		Command: "demo",
 	}, nil
 }
@@ -181,6 +229,27 @@ func (m *module) run(_ context.Context, job jobs.Job) error {
 	return nil
 }
 
+// tick — обработчик отложенного события: считает срабатывания и пишет
+// в журнал срок, за который событие сработало.
+func (m *module) tick(_ context.Context, job jobs.Job) error {
+	var in tick
+	if err := json.Unmarshal(job.Payload, &in); err != nil {
+		return fmt.Errorf("тело события %s: %w", job.ID, err)
+	}
+	m.ticks.Add(1)
+	m.log("tick", map[string]any{"id": job.ID, "due": in.Due})
+	return nil
+}
+
+// event — сведения об отложенном событии для снимка и подкоманды.
+func (m *module) event() eventView {
+	return eventView{
+		Kind:   string(eventKind),
+		Period: tickPeriod.String(),
+		Fired:  m.ticks.Load(),
+	}
+}
+
 // command — подкоманда: обычный режим печатает снимок, режим child живёт
 // до отмены и используется управляемым процессом.
 func (m *module) command(ctx context.Context, args []string) error {
@@ -195,6 +264,7 @@ func (m *module) command(ctx context.Context, args []string) error {
 		UDP:     m.udp.Addr(),
 		Lines:   m.lines.Load(),
 		Job:     string(kind),
+		Event:   m.event(),
 		Command: "demo",
 	}
 	line, err := json.Marshal(out)

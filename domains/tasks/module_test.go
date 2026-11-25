@@ -11,6 +11,7 @@ import (
 
 	"go-wex/engine/clock"
 	"go-wex/engine/core"
+	"go-wex/engine/events"
 	"go-wex/engine/jobs"
 	"go-wex/engine/service"
 )
@@ -41,6 +42,9 @@ func (r *testRegistry) Job(kind string, spec jobs.Spec) error {
 }
 
 func (r *testRegistry) Service(service.Service) {}
+
+// Event не используется: модуль задач событий не объявляет.
+func (r *testRegistry) Event(string, events.Rule) error { return nil }
 
 func (r *testRegistry) Command(name string, h core.CommandHandler) error {
 	r.commands[name] = h

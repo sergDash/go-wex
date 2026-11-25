@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 
+	"go-wex/engine/events"
 	"go-wex/engine/jobs"
 	"go-wex/engine/service"
 )
@@ -36,10 +37,12 @@ type Module interface {
 }
 
 // Registry — то, через что модуль объявляет возможности. Набор методов растёт
-// вместе с движком: HTTP, службы (в том числе слушатели), подкоманды, работы.
+// вместе с движком: HTTP, службы (в том числе слушатели), подкоманды, работы,
+// отложенные события.
 type Registry interface {
 	HTTP(method, path string, h Handler)
 	Job(kind string, spec jobs.Spec) error
+	Event(kind string, rule events.Rule) error
 	Service(s service.Service)
 	Command(name string, run CommandHandler) error
 }
