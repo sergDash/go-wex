@@ -90,6 +90,119 @@ body {
     font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+.input {
+    box-sizing: border-box;
+    flex: 1;
+    padding: 8px 10px;
+    border: 1px solid @border;
+    border-radius: 8px;
+    background: @bg;
+    color: @text;
+    font: inherit;
+    // Системная рамка фокуса вокруг поля выглядит грубо; вместо неё
+    // рамка меняет цвет, чтобы фокус оставался виден.
+    outline: none;
+
+    &:focus {
+        border-color: @accent;
+    }
+}
+
+// Списки. Три вида делят общую базу: поле с текущим значением и окно
+// пунктов. База — простой список; поиск и множественный выбор добавляют
+// к ней своё отдельными группами ниже.
+.select {
+    position: relative;
+    flex: none;
+    width: 100%;
+
+    .selected {
+        .row(8px);
+
+        justify-content: space-between;
+        padding: 8px 10px;
+        border: 1px solid @border;
+        border-radius: 8px;
+        background: @bg;
+        color: @text;
+        cursor: pointer;
+        user-select: none;
+
+        .value {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .caret {
+            flex: none;
+            color: @text-muted;
+        }
+
+        &:hover {
+            border-color: @accent;
+        }
+    }
+
+    // Открытый список подсвечивается той же рамкой, что и окно пунктов:
+    // иначе поле и выпадающий список выглядят как разные блоки.
+    &.open .selected {
+        border-color: @accent;
+    }
+
+    .options {
+        position: absolute;
+        // Отступ от поля задаётся положением, а не margin.
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 3;
+        width: 100%;
+        max-height: 240px;
+        overflow: auto;
+        border: 1px solid @accent;
+        border-radius: 8px;
+        background: @surface;
+        scrollbar-width: thin;
+        scrollbar-color: @border transparent;
+
+        .option {
+            padding: 6px 10px;
+            cursor: pointer;
+            white-space: nowrap;
+
+            &:hover {
+                background: fade(@accent, 10%);
+            }
+
+        }
+    }
+}
+
+
+// Список с поиском: поле ввода над пунктами.
+.select.searchable .search {
+    display: grid;
+    gap: 6px;
+    padding: 6px;
+
+    .input {
+        flex: none;
+        width: 100%;
+    }
+}
+
+// Множественный выбор: отмеченные пункты выделены цветом.
+.select.multiple .option.picked {
+    color: @accent;
+}
+
+// Хост компонента: ширину задаёт родитель, список заполняет её.
+x-select {
+    display: inline-block;
+    flex: none;
+    vertical-align: middle;
+}
+
 .panel {
     .surface();
 
@@ -156,112 +269,13 @@ body {
         .row();
     }
 
-    .input {
-        box-sizing: border-box;
-        flex: 1;
-        padding: 8px 10px;
-        border: 1px solid @border;
-        border-radius: 8px;
-        background: @bg;
-        color: @text;
-        font: inherit;
-        // Системная рамка фокуса вокруг поля выглядит грубо; вместо неё
-        // рамка меняет цвет, чтобы фокус оставался виден.
-        outline: none;
 
-        &:focus {
-            border-color: @accent;
-        }
-    }
 
     // Поле периода в форме события: короткое, чтобы строка не расползалась.
     // Идёт после .input: иначе его flex: 1 перебил бы ширину.
     .period {
         flex: none;
         width: 110px;
-    }
-
-    // Выпадающий список: поле с текущим значением и окно пунктов. Сделан
-    // из своих элементов: браузерный select нельзя одинаково оформить
-    // и связать со стейтом страницы.
-    .select {
-        position: relative;
-        flex: none;
-
-        .selected {
-            .row(8px);
-
-            justify-content: space-between;
-            padding: 8px 10px;
-            border: 1px solid @border;
-            border-radius: 8px;
-            background: @bg;
-            color: @text;
-            cursor: pointer;
-            user-select: none;
-
-            .value {
-                overflow: hidden;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-            }
-
-            .caret {
-                flex: none;
-                color: @text-muted;
-            }
-
-            &:hover {
-                border-color: @accent;
-            }
-        }
-
-        // Открытый список подсвечивается той же рамкой, что и окно пунктов:
-        // иначе поле и выпадающий список выглядят как разные блоки.
-        &.open .selected {
-            border-color: @accent;
-        }
-
-        .options {
-            position: absolute;
-            // Отступ от поля задаётся положением, а не margin.
-            top: calc(100% + 4px);
-            left: 0;
-            z-index: 3;
-            width: 100%;
-            max-height: 240px;
-            overflow: auto;
-            border: 1px solid @accent;
-            border-radius: 8px;
-            background: @surface;
-            scrollbar-width: thin;
-            scrollbar-color: @border transparent;
-
-            .option {
-                padding: 6px 10px;
-                cursor: pointer;
-                white-space: nowrap;
-
-                &:hover {
-                    background: fade(@accent, 10%);
-                }
-
-                &.picked {
-                    color: @accent;
-                }
-            }
-
-            .search {
-                display: grid;
-                gap: 6px;
-                padding: 6px;
-
-                .input {
-                    flex: none;
-                    width: 100%;
-                }
-            }
-        }
     }
 
     // Строка удаления: ширина по всей панели, элементы разнесены по краям,

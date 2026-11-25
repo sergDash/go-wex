@@ -193,7 +193,7 @@
                 </table>
                 <div class="deletebar" w-if="deletable.length">
                     <span class="hint">Удалить:</span>
-                    <div class="select mode" w-class="{ 'open': selects.deleteMode.open }">
+                    <div class="select mode simple" w-class="{ 'open': selects.deleteMode.open }">
                         <div class="selected" data-select="deleteMode" w-on="click:toggleSelect">
                             <span class="value">{{ selects.deleteMode.label }}</span>
                             <span class="caret">▾</span>
@@ -205,7 +205,7 @@
                                  w-on="click:pickSelect">вместе с работами (пока не сделано)</div>
                         </div>
                     </div>
-                    <div class="select pick" w-class="{ 'open': selects.deleteId.open }">
+                    <div class="select pick simple" w-class="{ 'open': selects.deleteId.open }">
                         <div class="selected" data-select="deleteId" w-on="click:toggleSelect">
                             <span class="value">{{ selects.deleteId.label }}</span>
                             <span class="caret">▾</span>
@@ -236,13 +236,13 @@
 
                 <p class="label">Виджет на компоненте</p>
                 <div class="line">
-                    <x-select :items="colorItems" :value="componentColor"
+                    <x-select class="demo" :items="colorItems" :value="componentColor"
                               @change="onComponentColor"></x-select>
                     <span class="hint">выбрано: {{ componentColor || '—' }}</span>
                 </div>
 
                 <p class="label">Простой выбор</p>
-                <div class="select demo" w-class="{ 'open': selects.color.open }">
+                <div class="select demo simple" w-class="{ 'open': selects.color.open }">
                     <div class="selected" data-select="color" w-on="click:toggleSelect">
                         <span class="value">{{ selects.color.label }}</span>
                         <span class="caret">▾</span>
@@ -255,7 +255,7 @@
                 </div>
 
                 <p class="label">Выбор с поиском</p>
-                <div class="select demo" w-class="{ 'open': selects.city.open }">
+                <div class="select demo searchable" w-class="{ 'open': selects.city.open }">
                     <div class="selected" data-select="city" w-on="click:toggleSelect">
                         <span class="value">{{ selects.city.label }}</span>
                         <span class="caret">▾</span>
@@ -272,7 +272,7 @@
                 </div>
 
                 <p class="label">Множественный выбор</p>
-                <div class="select demo" w-class="{ 'open': selects.tags.open }">
+                <div class="select demo multiple" w-class="{ 'open': selects.tags.open }">
                     <div class="selected" data-select="tags" w-on="click:toggleSelect">
                         <span class="value">{{ selects.tags.value.join(', ') || '— не выбрано —' }}</span>
                         <span class="caret">▾</span>
@@ -306,7 +306,7 @@
         событием change.
     -->
     <template id="x-select">
-        <div class="select widget" w-class="{ 'open': open }">
+        <div class="select widget simple" w-class="{ 'open': open }">
             <div class="selected" w-on="click:toggle">
                 <span class="value">{{ value || '— не выбрано —' }}</span>
                 <span class="caret">▾</span>
