@@ -8,6 +8,19 @@
 //    Обновление идёт по кнопке, без опроса: канал обновлений — сценарий
 //    SC-16, он ещё не сделан.
 $(function () {
+    var colors = ['красный', 'зелёный', 'синий', 'жёлтый'];
+
+    // options переводит строки в пункты списка: компоненту нужны значение
+    // и подпись, даже когда они совпадают.
+    function options(list) {
+        var out = [];
+
+        for (var i = 0; i < list.length; i++) {
+            out.push({ value: list[i], label: list[i] });
+        }
+        return out;
+    }
+
     var view = $('#app').state({
         checking: true,
         ok: false,
@@ -31,12 +44,58 @@ $(function () {
             city: { open: false, value: '', label: '— город —', query: '' },
             tags: { open: false, value: [] }
         },
-        colors: ['красный', 'зелёный', 'синий', 'жёлтый'],
+        colors: colors,
+        colorItems: options(colors),
+        componentColor: '',
         cities: ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'],
         cityMatches: ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'],
         tags: ['гость', 'подписчик', 'автор', 'редактор'],
         text: 'раз',
         failure: ''
+    });
+
+    // x-select — выпадающий список как компонент: разметка одна на все
+    // экземпляры, состояние у каждого своё, выбранное значение уходит
+    // родителю событием change. Внешняя функция метода вызывается с вью
+    // в this, поэтому emit отправляется через сохранённую ссылку.
+    var xSelect = $('#x-select')
+        .state(function () {
+            return { items: [], value: '', open: false };
+        })
+        .method('toggle', function (state) {
+            return function () {
+                state.open = !state.open;
+            };
+        })
+        .method('pick', function (state) {
+            var component = this;
+
+            return function (event) {
+                state.value = event.currentTarget.dataset.value;
+                state.open = false;
+                component.emit('change', state.value);
+            };
+        })
+        .on('$mount', function (state) {
+            return function () {
+                // Клик мимо закрывает список: обработчик на документе,
+                // клики внутри любого списка пропускаются.
+                document.addEventListener('click', function (event) {
+                    if (!event.target.closest('.select')) {
+                        state.open = false;
+                    }
+                });
+            };
+        });
+
+    view.component('x-select', xSelect);
+
+    // onComponentColor принимает выбранное от компонента: значение приходит
+    // аргументом события, а не через DOM.
+    view.method('onComponentColor', function (state) {
+        return function (value) {
+            state.componentColor = value;
+        };
     });
 
     // call разбирает конверт и отдаёт только result; ошибка становится

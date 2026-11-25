@@ -234,6 +234,13 @@
                     Данные лежат локально — выбор никуда не отправляется.
                 </p>
 
+                <p class="label">Виджет на компоненте</p>
+                <div class="line">
+                    <x-select :items="colorItems" :value="componentColor"
+                              @change="onComponentColor"></x-select>
+                    <span class="hint">выбрано: {{ componentColor || '—' }}</span>
+                </div>
+
                 <p class="label">Простой выбор</p>
                 <div class="select demo" w-class="{ 'open': selects.color.open }">
                     <div class="selected" data-select="color" w-on="click:toggleSelect">
@@ -291,6 +298,26 @@
                 </span>
             </footer>
         </main>
+    </template>
+
+    <!--
+        Компонент выпадающего списка. Разметка одна на все экземпляры,
+        состояние у каждого своё; выбранное значение уходит родителю
+        событием change.
+    -->
+    <template id="x-select">
+        <div class="select widget" w-class="{ 'open': open }">
+            <div class="selected" w-on="click:toggle">
+                <span class="value">{{ value || '— не выбрано —' }}</span>
+                <span class="caret">▾</span>
+            </div>
+            <div class="options" w-if="open">
+                <div class="option" w-for="item in items traceby item.value"
+                     w-class="{ 'picked': value === item.value }"
+                     data-value="{{ item.value }}"
+                     w-on="click:pick">{{ item.label }}</div>
+            </div>
+        </div>
     </template>
 
     <!--
