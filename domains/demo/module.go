@@ -44,6 +44,7 @@ const (
 type module struct {
 	disp    *jobs.Dispatcher
 	journal journal.Writer
+	running func() []string
 
 	tcp   *listen.TCP
 	udp   *listen.UDP
@@ -51,12 +52,14 @@ type module struct {
 	ticks atomic.Int64
 }
 
-// New отдаёт модуль для списка в точке сборки.
-func New(disp *jobs.Dispatcher, j journal.Writer) core.Module {
+// New отдаёт модуль для списка в точке сборки. running называет службы,
+// которые подняло приложение: список собирается после регистрации модулей,
+// поэтому приходит функцией, а не значением.
+func New(disp *jobs.Dispatcher, j journal.Writer, running func() []string) core.Module {
 	if j == nil {
 		j = journal.Discard{}
 	}
-	return &module{disp: disp, journal: j}
+	return &module{disp: disp, journal: j, running: running}
 }
 
 func (*module) Name() string { return "demo" }
@@ -76,6 +79,7 @@ func (m *module) Register(r core.Registry) error {
 	}))
 
 	r.HTTP("GET", "/api/demo", m.snapshot)
+	r.HTTP("GET", "/api/services", m.services)
 	r.HTTP("GET", "/api/demo/jobs", m.queue)
 	r.HTTP("POST", "/api/demo/jobs", m.enqueue)
 	r.HTTP("GET", "/api/demo/jobs/{id}", m.status)
@@ -198,6 +202,15 @@ func (m *module) snapshot(*http.Request) (any, error) {
 		Event:   m.event(),
 		Command: "demo",
 	}, nil
+}
+
+// services — состав приложения в порядке запуска. Модуль ничего не запускает
+// сам: список ему передала точка сборки, когда службы уже собраны.
+func (m *module) services(*http.Request) (any, error) {
+	if m.running == nil {
+		return []string{}, nil
+	}
+	return m.running(), nil
 }
 
 func (m *module) enqueue(r *http.Request) (any, error) {

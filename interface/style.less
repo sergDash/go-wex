@@ -239,6 +239,20 @@ body {
         font-size: 14px;
     }
 
+    // Список служб: имя в порядке запуска, моноширинно, по строке.
+    .services {
+        margin: 8px 0 0;
+        padding: 0;
+        list-style: none;
+        font-family: ui-monospace, "SFMono-Regular", monospace;
+        font-size: 14px;
+
+        .service {
+            padding: 4px 0;
+            border-bottom: 1px solid @border;
+        }
+    }
+
     // Строка проверки связи: состояние и кнопка повтора запроса рядом.
     .probe {
         .row(12px);

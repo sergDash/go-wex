@@ -15,7 +15,24 @@ import (
 	"go-wex/engine/jobs"
 	"go-wex/engine/process"
 	"go-wex/engine/schedule"
+	"go-wex/engine/service"
 )
+
+// namedService — служба с заданным именем: для проверки порядка в списке.
+type namedService struct{ name string }
+
+func (s namedService) Name() string              { return s.name }
+func (namedService) Start(context.Context) error { return nil }
+func (namedService) Stop(context.Context) error  { return nil }
+
+// TestServiceNames — службы перечисляются в порядке запуска: страница
+// показывает состав приложения в том виде, в каком его собрал движок.
+func TestServiceNames(t *testing.T) {
+	names := serviceNames([]service.Service{namedService{"journal"}, namedService{"http"}})
+	if len(names) != 2 || names[0] != "journal" || names[1] != "http" {
+		t.Fatalf("имена служб: %v", names)
+	}
+}
 
 // TestOpenBrowserStopsOnCancel — открытие страницы не ждёт порт, если
 // процесс останавливают: горутина завершается по отмене контекста.

@@ -19,6 +19,7 @@ $(function () {
             event: { kind: '', period: '', fired: 0 }
         },
         jobs: [],
+        services: [],
         text: 'раз',
         failure: ''
     });
@@ -81,23 +82,30 @@ $(function () {
             });
     }
 
-    // snapshot читает связь, снимок демо и очередь одним заходом: запросы
-    // идут параллельно, шаблон перерисовывается один раз.
+    // snapshot читает связь, снимок демо, очередь и список служб одним
+    // заходом: запросы идут параллельно, шаблон перерисовывается один раз.
     function snapshot(state) {
         state.checking = true;
         state.status = 'проверяем связь с сервером…';
 
-        Promise.all([call('/api/health'), call('/api/demo'), call('/api/demo/jobs')])
+        Promise.all([
+            call('/api/health'),
+            call('/api/demo'),
+            call('/api/demo/jobs'),
+            call('/api/services')
+        ])
             .then(function (values) {
                 const health = values[0];
                 const demo = values[1];
                 const rows = values[2];
+                const services = values[3];
 
                 state.checking = false;
                 state.ok = health.ok;
                 state.status = health.status;
                 state.demo = demo;
                 state.jobs = rows.map(rowState);
+                state.services = services;
                 state.failure = '';
             })
             .catch(function (error) {

@@ -70,7 +70,7 @@ func runCommand(args []string) int {
 
 	// HTTP в режиме подкоманды не нужен: маршруты собираются в пустой приёмник.
 	reg := &registry{api: discardHTTP{}, jobs: jobReg, events: evReg, commands: commands}
-	for _, m := range moduleList(disp, journal.Discard{}) {
+	for _, m := range moduleList(disp, journal.Discard{}, nil) {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
 			return 1
@@ -171,7 +171,15 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 
 	commands := process.NewRegistry()
 	reg := &registry{api: srv, jobs: jobReg, events: evReg, commands: commands}
-	for _, m := range moduleList(disp, jw) {
+
+	// Состав служб известен только после регистрации модулей, поэтому модулю
+	// передаётся функция: к моменту запроса список уже собран.
+	var services []service.Service
+	running := func() []string {
+		return serviceNames(services)
+	}
+
+	for _, m := range moduleList(disp, jw, running) {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
 			return 1
@@ -187,7 +195,7 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	evSched.SetClock(clk)
 	evSched.SetJournal(jw)
 
-	services := make([]service.Service, 0, 3+len(reg.services))
+	services = make([]service.Service, 0, 3+len(reg.services))
 	if journalSvc != nil {
 		services = append(services, journalSvc)
 	}
@@ -210,6 +218,16 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		return 1
 	}
 	return 0
+}
+
+// serviceNames — имена служб в порядке запуска: страница показывает состав
+// приложения как есть, без дополнительных описаний.
+func serviceNames(services []service.Service) []string {
+	names := make([]string, 0, len(services))
+	for _, s := range services {
+		names = append(names, s.Name())
+	}
+	return names
 }
 
 // openBrowser открывает страницу, дождавшись, что служба заняла адрес.
@@ -251,11 +269,11 @@ func browserCommand() string {
 }
 
 // moduleList — единственное место, где приложение знает о модулях.
-func moduleList(disp *jobs.Dispatcher, jw journal.Writer) []core.Module {
+func moduleList(disp *jobs.Dispatcher, jw journal.Writer, running func() []string) []core.Module {
 	return []core.Module{
 		health.New(),
 		tasks.New(disp),
-		demo.New(disp, jw),
+		demo.New(disp, jw, running),
 	}
 }
 

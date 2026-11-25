@@ -46,8 +46,9 @@ func NewTCP(addr string, h ConnHandler, j journal.Writer) *TCP {
 	return &TCP{addr: addr, handler: h, journal: j}
 }
 
-// Name — имя службы для группы.
-func (s *TCP) Name() string { return "tcp " + s.addr }
+// Name — имя службы для группы. Адрес берётся фактический: при порте 0
+// настройка не говорит, какой порт занят, а в списке служб нужен настоящий.
+func (s *TCP) Name() string { return "tcp " + s.Addr() }
 
 // Start открывает сокет и начинает принимать соединения.
 func (s *TCP) Start(ctx context.Context) error {
@@ -186,7 +187,7 @@ func NewUDP(addr string, h PacketHandler, j journal.Writer) *UDP {
 }
 
 // Name — имя службы для группы.
-func (s *UDP) Name() string { return "udp " + s.addr }
+func (s *UDP) Name() string { return "udp " + s.Addr() }
 
 // Start открывает сокет и начинает принимать датаграммы.
 func (s *UDP) Start(ctx context.Context) error {

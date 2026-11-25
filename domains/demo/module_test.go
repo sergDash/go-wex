@@ -62,12 +62,13 @@ func (r *testRegistry) Command(name string, h core.CommandHandler) error {
 // TestRegister — модуль объявляет маршруты, работу, три службы и подкоманду.
 func TestRegister(t *testing.T) {
 	reg := newTestRegistry()
-	if err := New(nil, nil).Register(reg); err != nil {
+	if err := New(nil, nil, nil).Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	for _, key := range []string{
 		"GET /api/demo",
+		"GET /api/services",
 		"GET /api/demo/jobs",
 		"POST /api/demo/jobs",
 		"GET /api/demo/jobs/{id}",
@@ -158,6 +159,29 @@ func TestEnqueueValidation(t *testing.T) {
 	var e *core.Error
 	if err == nil || !errors.As(err, &e) || e.Status != http.StatusBadRequest {
 		t.Fatalf("ошибка: %v", err)
+	}
+}
+
+// TestServices — список служб отдаётся в том порядке, в каком его передала
+// точка сборки; без поставщика список пуст.
+func TestServices(t *testing.T) {
+	m := &module{running: func() []string { return []string{"journal", "http"} }}
+
+	value, err := m.services(httptest.NewRequest(http.MethodGet, "/api/services", nil))
+	if err != nil {
+		t.Fatalf("services: %v", err)
+	}
+	names, ok := value.([]string)
+	if !ok || len(names) != 2 || names[0] != "journal" || names[1] != "http" {
+		t.Fatalf("службы: %+v", value)
+	}
+
+	empty, err := (&module{}).services(httptest.NewRequest(http.MethodGet, "/api/services", nil))
+	if err != nil {
+		t.Fatalf("services без поставщика: %v", err)
+	}
+	if names, ok := empty.([]string); !ok || len(names) != 0 {
+		t.Fatalf("пустой список: %+v", empty)
 	}
 }
 
