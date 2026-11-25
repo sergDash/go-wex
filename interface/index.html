@@ -118,6 +118,7 @@
                     <input class="input" w-bind="text" placeholder="текст работы">
                     <button class="button" w-on="click:enqueue">Поставить</button>
                 </div>
+                <p class="label" w-if="jobs.length">Прокручиваемый список</p>
                 <div class="scroll" w-if="jobs.length" w-stick>
                     <table class="table">
                         <thead>
