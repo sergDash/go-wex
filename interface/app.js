@@ -23,6 +23,19 @@ $(function () {
         return out;
     }
 
+    // filterItems отбирает пункты по строке без учёта регистра.
+    function filterItems(items, query) {
+        var needle = query.trim().toLowerCase();
+        var out = [];
+
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].label.toLowerCase().indexOf(needle) >= 0) {
+                out.push(items[i]);
+            }
+        }
+        return out;
+    }
+
     // watchOutside закрывает список компонента кликом мимо своего окна:
     // клик по другому списку — старый или компонент — тоже считается мимо,
     // поэтому одновременно открыт только один.
@@ -120,23 +133,16 @@ $(function () {
 
             return function () {
                 state.open = !state.open;
+                // Ввод не стирается: при повторном открытии список
+                // пересобирается по тому, что уже набрано.
                 if (state.open) {
-                    state.matches = state.items;
-                    state.query = '';
+                    state.matches = filterItems(state.items, state.query);
                 }
             };
         })
         .method('filter', function (state) {
             return function (event) {
-                var query = event.currentTarget.value.trim().toLowerCase();
-                var matches = [];
-
-                for (var i = 0; i < state.items.length; i++) {
-                    if (state.items[i].label.toLowerCase().indexOf(query) >= 0) {
-                        matches.push(state.items[i]);
-                    }
-                }
-                state.matches = matches;
+                state.matches = filterItems(state.items, event.currentTarget.value);
             };
         })
         .method('pick', function (state) {
