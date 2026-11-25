@@ -216,6 +216,12 @@ body {
             }
         }
 
+        // Открытый список подсвечивается той же рамкой, что и окно пунктов:
+        // иначе поле и выпадающий список выглядят как разные блоки.
+        &.open .selected {
+            border-color: @accent;
+        }
+
         .options {
             position: absolute;
             // Отступ от поля задаётся положением, а не margin.
@@ -225,7 +231,7 @@ body {
             width: 100%;
             max-height: 240px;
             overflow: auto;
-            border: 1px solid @border;
+            border: 1px solid @accent;
             border-radius: 8px;
             background: @surface;
             scrollbar-width: thin;

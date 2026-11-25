@@ -28,7 +28,7 @@ $(function () {
             deleteMode: { open: false, value: 'event', label: 'только событие' },
             deleteId: { open: false, value: '', label: '— событие —' },
             color: { open: false, value: 'зелёный', label: 'зелёный' },
-            city: { open: false, value: '', label: '— город —' },
+            city: { open: false, value: '', label: '— город —', query: '' },
             tags: { open: false, value: [] }
         },
         colors: ['красный', 'зелёный', 'синий', 'жёлтый'],
@@ -353,6 +353,12 @@ $(function () {
     // в разметке, логика по-прежнему меняет только стейт.
     view.directive('w-stick', null, function ($el) {
         $el[0].scrollTop = $el[0].scrollHeight;
+    });
+
+    // w-focus ставит курсор в поле, когда оно появляется: поиск готов
+    // к вводу сразу после открытия списка.
+    view.directive('w-focus', null, function ($el) {
+        $el[0].focus();
     });
 
     // Первый снимок читается сразу после появления страницы: $mount —

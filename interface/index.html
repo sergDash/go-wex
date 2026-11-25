@@ -255,7 +255,8 @@
                     </div>
                     <div class="options" w-if="selects.city.open">
                         <div class="search">
-                            <input class="input" w-on="input:filterCities" placeholder="поиск">
+                            <input class="input" w-bind="selects.city.query"
+                                   w-on="input:filterCities" w-focus placeholder="поиск">
                         </div>
                         <div class="option" w-for="item in cityMatches traceby item"
                              data-select="city" data-value="{{ item }}"
