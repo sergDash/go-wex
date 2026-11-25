@@ -192,8 +192,8 @@ func TestQueue(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("строк %d, ожидалось 2", len(rows))
 	}
-	// Свежая работа сверху.
-	if rows[0].Text != "вторая" || rows[1].Text != "первая" {
+	// Порядок постановки: первая строка сверху, свежая внизу.
+	if rows[0].Text != "первая" || rows[1].Text != "вторая" {
 		t.Fatalf("порядок: %q, %q", rows[0].Text, rows[1].Text)
 	}
 	if rows[0].Status != jobs.StatusQueued || rows[0].CreatedAt == nil {
