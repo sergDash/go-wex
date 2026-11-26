@@ -22,7 +22,7 @@ import (
 	"go-wex/engine/clock"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
-	"go-wex/engine/store"
+	"go-wex/engine/service"
 )
 
 // Kind — вид события. Он же вид работы, которую событие ставит: обработчик
@@ -102,12 +102,23 @@ type record struct {
 // collection — коллекция сроков в хранилище.
 const collection = "events"
 
+// State — хранилище сроков: четыре операции, которые нужны службе событий.
+// Интерфейс объявлен здесь, на стороне потребителя, поэтому рядом с файловым
+// хранилищем движка может стоять таблица модуля: событиям всё равно, где
+// лежит срок, — важно, что его можно прочитать и записать.
+type State interface {
+	Get(collection, key string, dst any) (bool, error)
+	Put(collection, key string, value any) error
+	Delete(collection, key string) error
+	Keys(collection string) []string
+}
+
 // Enqueuer — постановка работы в очередь. Разборщик подходит целиком: он
 // проверяет, что вид объявлен, подставляет класс по умолчанию и будит себя
 // после постановки. Known нужен событиям, которые добавляют данными: вид
 // работ должен существовать, иначе работа окажется без обработчика.
 type Enqueuer interface {
-	Enqueue(ctx context.Context, kind jobs.Kind, payload any, class jobs.Class) (string, error)
+	Enqueue(ctx context.Context, req jobs.Request) (string, error)
 	Known(kind jobs.Kind) bool
 }
 
@@ -133,7 +144,7 @@ type Event struct {
 // работы и сдвигает срок. Шаг отделён от цикла, чтобы проверки не спали
 // и не ждали тикера.
 type Scheduler struct {
-	store   *store.Store
+	state   State
 	queue   Enqueuer
 	reg     *Registry
 	clock   clock.Clock
@@ -144,13 +155,13 @@ type Scheduler struct {
 	mu      sync.Mutex
 	started bool
 	cancel  context.CancelFunc
-	done    chan struct{}
+	done    chan error
 }
 
 // NewScheduler собирает службу событий.
-func NewScheduler(st *store.Store, q Enqueuer, r *Registry) *Scheduler {
+func NewScheduler(state State, q Enqueuer, r *Registry) *Scheduler {
 	return &Scheduler{
-		store:   st,
+		state:   state,
 		queue:   q,
 		reg:     r,
 		clock:   clock.Real{},
@@ -183,19 +194,27 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		return errors.New("события: служба уже запущена")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	s.cancel = cancel
 	s.done = done
 	s.started = true
 	s.mu.Unlock()
 
+	// Граница службы: паника в обходе сроков становится ошибкой и уходит
+	// в канал итога, а не завершает процесс.
 	go func() {
 		defer close(done)
-		if err := s.Run(runCtx); err != nil {
-			s.log.Printf("события: %v", err)
-		}
+		done <- service.Guard(func() error { return s.Run(runCtx) })
 	}()
 	return nil
+}
+
+// Done отдаёт канал итога работы службы событий. Группа служб по нему
+// узнаёт, что обход сроков встал.
+func (s *Scheduler) Done() <-chan error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
 }
 
 // Stop отменяет обход и ждёт завершения его горутины.
@@ -336,7 +355,14 @@ func (s *Scheduler) Step(ctx context.Context, now time.Time) ([]Firing, error) {
 // в doc/capabilities/Недостатки.md: падение в этом окне даёт повторное
 // срабатывание, но не потерю.
 func (s *Scheduler) fire(ctx context.Context, id string, kind jobs.Kind, payload any, class jobs.Class, due time.Time) (string, error) {
-	job, err := s.queue.Enqueue(ctx, kind, payload, class)
+	// Срок события становится сроком работы: работа нужна была к этому
+	// моменту, и в строке очереди видно, на какой срок она опоздала.
+	job, err := s.queue.Enqueue(ctx, jobs.Request{
+		Kind:      kind,
+		Payload:   payload,
+		Class:     class,
+		NotBefore: due,
+	})
 	if err != nil {
 		// Срок не двигаем: работу поставить не удалось, попытка повторится
 		// на следующем проходе с тем же сроком.
@@ -369,14 +395,14 @@ func (s *Scheduler) Delete(id string) error {
 	}
 
 	var rec record
-	ok, err := s.store.Get(collection, id, &rec)
+	ok, err := s.state.Get(collection, id, &rec)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
-	return s.store.Delete(collection, id)
+	return s.state.Delete(collection, id)
 }
 
 // advance — срок после срабатывания: первый из сроков, который ещё впереди.
@@ -390,11 +416,11 @@ func advance(due time.Time, period time.Duration, now time.Time) time.Time {
 // records читает все записи событий: и объявленные кодом, и добавленные
 // данными. Ключ — номер события; у вида из кода номер совпадает с видом.
 func (s *Scheduler) records() (map[string]record, error) {
-	keys := s.store.Keys(collection)
+	keys := s.state.Keys(collection)
 	out := make(map[string]record, len(keys))
 	for _, key := range keys {
 		var rec record
-		ok, err := s.store.Get(collection, key, &rec)
+		ok, err := s.state.Get(collection, key, &rec)
 		if err != nil {
 			return nil, err
 		}
@@ -408,14 +434,14 @@ func (s *Scheduler) records() (map[string]record, error) {
 // setNext записывает срок вида, объявленного кодом: остальные поля записи
 // приходят из правила, поэтому хранить их незачем.
 func (s *Scheduler) setNext(kind Kind, at time.Time) error {
-	return s.store.Put(collection, string(kind), record{Next: at})
+	return s.state.Put(collection, string(kind), record{Next: at})
 }
 
 // advanceRecord сдвигает срок события, добавленного данными, сохраняя его
 // вид, период, класс и тело.
 func (s *Scheduler) advanceRecord(key string, rec record, next time.Time) error {
 	rec.Next = next
-	return s.store.Put(collection, key, rec)
+	return s.state.Put(collection, key, rec)
 }
 
 // sortedKeys — ключи записей по возрастанию: обход не зависит от порядка
@@ -461,7 +487,7 @@ func (s *Scheduler) Add(kind jobs.Kind, period time.Duration, class jobs.Class, 
 		Payload: raw,
 		Next:    s.clock.Now().Add(period),
 	}
-	if err := s.store.Put(collection, id, rec); err != nil {
+	if err := s.state.Put(collection, id, rec); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -478,7 +504,7 @@ func (s *Scheduler) newID() (string, error) {
 		id := hex.EncodeToString(b[:])
 
 		var rec record
-		ok, err := s.store.Get(collection, id, &rec)
+		ok, err := s.state.Get(collection, id, &rec)
 		if err != nil {
 			return "", err
 		}

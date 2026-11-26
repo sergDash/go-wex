@@ -2,6 +2,7 @@ package demo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"go-wex/engine/core"
 	"go-wex/engine/events"
+	"go-wex/engine/gate"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
 	"go-wex/engine/listen"
@@ -23,6 +25,7 @@ import (
 // ничего не запускает.
 type testRegistry struct {
 	routes   map[string]core.Handler
+	raw      map[string]http.Handler
 	specs    map[jobs.Kind]jobs.Spec
 	events   map[events.Kind]events.Rule
 	services []service.Service
@@ -32,6 +35,7 @@ type testRegistry struct {
 func newTestRegistry() *testRegistry {
 	return &testRegistry{
 		routes:   map[string]core.Handler{},
+		raw:      map[string]http.Handler{},
 		specs:    map[jobs.Kind]jobs.Spec{},
 		events:   map[events.Kind]events.Rule{},
 		commands: map[string]core.CommandHandler{},
@@ -40,6 +44,12 @@ func newTestRegistry() *testRegistry {
 
 func (r *testRegistry) HTTP(method, path string, h core.Handler) {
 	r.routes[method+" "+path] = h
+}
+
+// HTTPRaw запоминает сырой маршрут: по нему проверяется, что поток объявлен
+// рядом с простыми маршрутами.
+func (r *testRegistry) HTTPRaw(method, path string, h http.Handler) {
+	r.raw[method+" "+path] = h
 }
 
 func (r *testRegistry) Job(kind string, spec jobs.Spec) error {
@@ -61,10 +71,14 @@ func (r *testRegistry) Command(name string, h core.CommandHandler) error {
 	return nil
 }
 
-// TestRegister — модуль объявляет маршруты, работу, три службы и подкоманду.
+// TestRegister — модуль объявляет маршруты, работы, три службы и подкоманду.
 func TestRegister(t *testing.T) {
 	reg := newTestRegistry()
-	if err := New(nil, nil, nil, nil).Register(reg); err != nil {
+	module, err := New(nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := module.Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -77,6 +91,7 @@ func TestRegister(t *testing.T) {
 		"GET /api/demo/jobs",
 		"POST /api/demo/jobs",
 		"GET /api/demo/jobs/{id}",
+		"POST /api/demo/generate",
 	} {
 		if _, ok := reg.routes[key]; !ok {
 			t.Fatalf("маршрут %q не объявлен", key)
@@ -85,13 +100,22 @@ func TestRegister(t *testing.T) {
 	if spec, ok := reg.specs[kind]; !ok || spec.Handler == nil || spec.Class != jobs.ClassBackground {
 		t.Fatalf("вид работы: %+v", spec)
 	}
+	if spec, ok := reg.specs[kind]; !ok || spec.MinIdle != defaultMinIdle {
+		t.Fatalf("порог простоя вида работы: %+v", spec)
+	}
+	if spec, ok := reg.specs[generateKind]; !ok || spec.Handler == nil {
+		t.Fatalf("вид работы хода: %+v", spec)
+	}
+	if _, ok := reg.raw["GET /api/demo/stream"]; !ok {
+		t.Fatal("сырой маршрут потока не объявлен")
+	}
 	if spec, ok := reg.specs[eventKind]; !ok || spec.Handler == nil {
 		t.Fatalf("вид работы события: %+v", spec)
 	}
-	if rule, ok := reg.events[events.Kind(eventKind)]; !ok || rule.Period != tickPeriod || rule.Payload == nil {
+	if rule, ok := reg.events[events.Kind(eventKind)]; !ok || rule.Period != defaultTickPeriod || rule.Payload == nil {
 		t.Fatalf("отложенное событие: %+v", rule)
 	}
-	if len(reg.services) != 3 {
+	if len(reg.services) != 4 {
 		t.Fatalf("служб: %d", len(reg.services))
 	}
 	if _, ok := reg.commands["demo"]; !ok {
@@ -142,7 +166,7 @@ func TestJob(t *testing.T) {
 
 // TestCommand — обычный режим печатает снимок, режим child живёт до отмены.
 func TestCommand(t *testing.T) {
-	m := &module{journal: journal.Discard{}}
+	m := &module{journal: journal.Discard{}, slot: gate.New(1)}
 	m.tcp = listen.NewTCP("127.0.0.1:0", m.echoTCP, journal.Discard{})
 	m.udp = listen.NewUDP("127.0.0.1:0", m.echoUDP, journal.Discard{})
 
@@ -167,25 +191,33 @@ func TestEnqueueValidation(t *testing.T) {
 	}
 }
 
-// TestServices — список служб отдаётся в том порядке, в каком его передала
+// TestServices — состояние служб отдаётся в том порядке, в каком его передала
 // точка сборки; без поставщика список пуст.
 func TestServices(t *testing.T) {
-	m := &module{running: func() []string { return []string{"journal", "http"} }}
+	m := &module{states: func() []service.State {
+		return []service.State{
+			{Name: "journal", Running: true, Ready: true},
+			{Name: "http", Running: true, Restarts: 1, Failure: "был отказ"},
+		}
+	}}
 
 	value, err := m.services(httptest.NewRequest(http.MethodGet, "/api/services", nil))
 	if err != nil {
 		t.Fatalf("services: %v", err)
 	}
-	names, ok := value.([]string)
-	if !ok || len(names) != 2 || names[0] != "journal" || names[1] != "http" {
+	rows, ok := value.([]serviceView)
+	if !ok || len(rows) != 2 || rows[0].Name != "journal" || !rows[0].Ready {
 		t.Fatalf("службы: %+v", value)
+	}
+	if rows[1].Restarts != 1 || rows[1].Failure != "был отказ" {
+		t.Fatalf("состояние службы: %+v", rows[1])
 	}
 
 	empty, err := (&module{}).services(httptest.NewRequest(http.MethodGet, "/api/services", nil))
 	if err != nil {
 		t.Fatalf("services без поставщика: %v", err)
 	}
-	if names, ok := empty.([]string); !ok || len(names) != 0 {
+	if rows, ok := empty.([]serviceView); !ok || len(rows) != 0 {
 		t.Fatalf("пустой список: %+v", empty)
 	}
 }
@@ -379,9 +411,29 @@ func TestQueue(t *testing.T) {
 	}
 }
 
+// TestStreamParts — поток отдаёт порции по одной и закрывается признаком
+// конца: такой ответ нельзя вернуть значением.
+func TestStreamParts(t *testing.T) {
+	m := &module{journal: journal.Discard{}}
+	req := httptest.NewRequest(http.MethodGet, "/api/demo/stream?parts=2&ms=0", nil)
+	rec := httptest.NewRecorder()
+
+	m.stream(rec, req)
+
+	if got := rec.Header().Get("Content-Type"); got != "text/event-stream; charset=utf-8" {
+		t.Fatalf("тип ответа: %q", got)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`data: {"part":1}`, `data: {"part":2}`, `data: {"done":true}`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("в теле нет %q: %s", want, body)
+		}
+	}
+}
+
 // TestTick — событие отмечает срабатывание и показывает его в снимке.
 func TestTick(t *testing.T) {
-	m := &module{journal: journal.Discard{}}
+	m := &module{journal: journal.Discard{}, period: defaultTickPeriod, minIdle: defaultMinIdle}
 	job := jobs.Job{ID: "1", Kind: eventKind, Payload: []byte(`{"due":"2026-11-25T12:00:00Z"}`)}
 
 	if err := m.tick(context.Background(), job); err != nil {
@@ -392,7 +444,93 @@ func TestTick(t *testing.T) {
 	}
 
 	view := m.event()
-	if view.Kind != string(eventKind) || view.Period != tickPeriod.String() || view.Fired != 1 {
+	if view.Kind != string(eventKind) || view.Period != defaultTickPeriod.String() || view.Fired != 1 {
 		t.Fatalf("снимок события: %+v", view)
+	}
+}
+
+// TestGenerateNow — ход сейчас проходит через слот и отдаёт время ожидания
+// и работы; после ответа слот свободен.
+func TestGenerateNow(t *testing.T) {
+	m := &module{journal: journal.Discard{}, slot: gate.New(1)}
+
+	value, err := m.generate(httptest.NewRequest(http.MethodPost, "/api/demo/generate",
+		strings.NewReader(`{"ms":10}`)))
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	view, ok := value.(generateView)
+	if !ok {
+		t.Fatalf("ответ хода: %+v", value)
+	}
+	if view.TookMS < 10 {
+		t.Fatalf("время работы: %d", view.TookMS)
+	}
+	if view.Gate.Capacity != 1 || view.Gate.Active != 0 {
+		t.Fatalf("слот после ответа: %+v", view.Gate)
+	}
+}
+
+// TestGenerateQueued — тот же ход можно поставить работой: модуль выбирает
+// контур, а движок даёт очередь и слот.
+func TestGenerateQueued(t *testing.T) {
+	reg := jobs.NewRegistry()
+	if err := reg.Add(generateKind, jobs.Spec{
+		Class:   jobs.ClassBackground,
+		Handler: (&module{slot: gate.New(1)}).generateJob,
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	d := jobs.NewDispatcher(jobs.NewMemoryQueue(), reg)
+	m := &module{disp: d, journal: journal.Discard{}, slot: gate.New(1)}
+
+	value, err := m.generate(httptest.NewRequest(http.MethodPost, "/api/demo/generate",
+		strings.NewReader(`{"ms":0,"queued":true}`)))
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	view := value.(generateView)
+	if view.ID == "" || view.Status != jobs.StatusQueued {
+		t.Fatalf("ответ постановки хода: %+v", view)
+	}
+
+	if handled, err := d.Step(context.Background()); err != nil || !handled {
+		t.Fatalf("Step: handled=%v err=%v", handled, err)
+	}
+	if _, status, _, err := d.Get(context.Background(), view.ID); err != nil || status != jobs.StatusDone {
+		t.Fatalf("ход в очереди: status=%q err=%v", status, err)
+	}
+}
+
+// TestSettings — настройки модуля меняют период события и порог простоя,
+// а неизвестный ключ даёт ошибку, как и в настройках приложения.
+func TestSettings(t *testing.T) {
+	value, err := New(nil, nil, nil, nil, nil, json.RawMessage(`{"tickPeriod":"2s","minIdle":"1s"}`))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	m, ok := value.(*module)
+	if !ok {
+		t.Fatalf("модуль: %T", value)
+	}
+	if m.period != 2*time.Second || m.minIdle != time.Second {
+		t.Fatalf("настройки: period=%s minIdle=%s", m.period, m.minIdle)
+	}
+
+	// Пустой раздел даёт умолчания.
+	value, err = New(nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New без настроек: %v", err)
+	}
+	m = value.(*module)
+	if m.period != defaultTickPeriod || m.minIdle != defaultMinIdle {
+		t.Fatalf("умолчания: period=%s minIdle=%s", m.period, m.minIdle)
+	}
+
+	if _, err := New(nil, nil, nil, nil, nil, json.RawMessage(`{"tick":"2s"}`)); err == nil {
+		t.Fatal("неизвестный ключ принят")
+	}
+	if _, err := New(nil, nil, nil, nil, nil, json.RawMessage(`{"minIdle":"0s"}`)); err == nil {
+		t.Fatal("нулевой срок принят")
 	}
 }

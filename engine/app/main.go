@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,6 +29,7 @@ import (
 	"go-wex/engine/config"
 	"go-wex/engine/core"
 	"go-wex/engine/events"
+	"go-wex/engine/gate"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
@@ -34,6 +37,7 @@ import (
 	"go-wex/engine/schedule"
 	"go-wex/engine/service"
 	"go-wex/engine/store"
+	"go-wex/engine/version"
 )
 
 func main() {
@@ -46,32 +50,80 @@ func run() int {
 	webDir := flag.String("web", "", "переопределить каталог интерфейса из настроек")
 	flag.Parse()
 
-	// Первый аргумент разбирается до настроек и служб: подкоманда не должна
-	// зависеть от файла настроек, который нужен службам.
-	if args := flag.Args(); len(args) > 0 {
-		return runCommand(args)
-	}
-
 	cfg, err := config.LoadHTTPAPI(*cfgPath)
 	if err != nil {
 		log.Printf("%v", err)
 		return 1
 	}
+
+	// Первый аргумент выбирает режим: подкоманда выполняет одну работу
+	// с настоящими зависимостями из тех же настроек, службы не поднимает.
+	if args := flag.Args(); len(args) > 0 {
+		return runCommand(cfg, args)
+	}
 	return runServer(cfg, *webDir)
 }
 
-// runCommand выполняет подкоманду вместо служб: HTTP, хранилище, журнал
-// и разборщик не поднимаются. Модули всё равно регистрируются, потому что
-// подкоманду объявляет модуль.
-func runCommand(args []string) int {
+// runCommand выполняет подкоманду вместо служб. Зависимости собираются из
+// тех же настроек, что и у сервера: журнал открывается на время команды,
+// очередь лежит поверх настоящего хранилища и открывает его при первом
+// обращении. HTTP и службы не поднимаются: команда выполняет одну работу.
+func runCommand(cfg config.HTTPAPI, args []string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	clk := clock.NewReal()
+
+	// Журнал команды: открывается до работы и закрывается после, чтобы её
+	// записи не терялись. Без раздела настроек остаётся пустой приёмник.
+	var jw journal.Writer = journal.Discard{}
+	if cfg.Journal != nil {
+		j := journal.New(cfg.Journal.Path, cfg.Journal.MaxSize, cfg.Journal.Keep, clk)
+		if err := j.Start(ctx); err != nil {
+			log.Printf("журнал: %v", err)
+			return 1
+		}
+		defer func() { _ = j.Stop(context.Background()) }()
+		jw = j
+	}
+
+	// Хранилище открывается при первом обращении: команда, которой оно
+	// не нужно, не появляется вторым писателем рядом с сервером.
+	queue := jobs.OpenStoreQueueLater(func() (*store.Store, error) {
+		return store.Open(cfg.Store.Path, nil)
+	})
 	jobReg := jobs.NewRegistry()
-	disp := jobs.NewDispatcher(jobs.NewMemoryQueue(), jobReg)
+	disp := jobs.NewDispatcher(queue, jobReg)
+	disp.SetClock(clk)
+	disp.SetJournal(jw)
+	disp.SetKeep(cfg.Jobs.Keep)
+
 	commands := process.NewRegistry()
 	evReg := events.NewRegistry()
 
+	// Служебных зависимостей в команде нет: службы не поднимаются, поэтому
+	// список состояний пуст, а службы событий нет вовсе.
+	modules, err := buildModules(deps{
+		disp:     disp,
+		journal:  jw,
+		states:   func() []service.State { return nil },
+		events:   nil,
+		slot:     gate.New(1),
+		settings: cfg.Modules.Settings,
+	})
+	if err != nil {
+		log.Printf("модули: %v", err)
+		return 1
+	}
+	modules, err = selectModules(modules, cfg.Modules.Disabled, cfg.Modules.Settings)
+	if err != nil {
+		log.Printf("настройки: %v", err)
+		return 1
+	}
+
 	// HTTP в режиме подкоманды не нужен: маршруты собираются в пустой приёмник.
 	reg := &registry{api: discardHTTP{}, jobs: jobReg, events: evReg, commands: commands}
-	for _, m := range moduleList(disp, journal.Discard{}, nil, nil) {
+	for _, m := range modules {
 		if err := m.Register(reg); err != nil {
 			log.Printf("модуль %s: %v", m.Name(), err)
 			return 1
@@ -90,8 +142,6 @@ func runCommand(args []string) int {
 		return 2
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := handler(ctx, args[1:]); err != nil {
 		log.Printf("подкоманда %s: %v", name, err)
 		return 1
@@ -130,6 +180,18 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	srv.SetActivity(meter)
 	srv.SetJournal(jw)
 
+	// Пределы транспорта: медленный клиент не держит соединение, тело запроса
+	// не растёт без границы. Значения приходят настройкой, а не из кода.
+	readHeader, idle, err := serverTimeouts(cfg.Server)
+	if err != nil {
+		log.Printf("настройки: %v", err)
+		return 1
+	}
+	srv.SetTimeouts(readHeader, idle)
+	if cfg.Server.MaxBody != nil {
+		srv.SetMaxBody(*cfg.Server.MaxBody)
+	}
+
 	// Хранилище открывается до служб: ошибка версии или повреждённого файла
 	// должна быть видна сразу, а не при первом запросе.
 	st, err := store.Open(cfg.Store.Path, nil)
@@ -149,6 +211,20 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	disp := jobs.NewDispatcher(queue, jobReg)
 	disp.SetClock(clk)
 	disp.SetJournal(jw)
+	// Правило хранения: очередь ставит работу на каждый ход, поэтому старые
+	// завершённые строки убираются, а не копятся до полной перезаписи файла.
+	disp.SetKeep(cfg.Jobs.Keep)
+	// Активность и занятость приходят из одного счётчика: простой считается
+	// от последнего запроса, фон не берётся, пока запрос идёт. Пороги простоя
+	// объявляют сами виды работ.
+	disp.SetIdleFunc(func(time.Time) (time.Time, bool) {
+		return meter.LastActive(), meter.Busy()
+	})
+
+	// Слот генерации: один ресурс на процесс. Синхронный ход и фоновая работа
+	// берут одно и то же разрешение, поэтому не сталкиваются. Создаётся здесь
+	// и передаётся зависимостью: глобальной переменной быть не должно.
+	slot := gate.New(1)
 
 	// Виды отложенных событий собираются от модулей. Срок каждого вида
 	// лежит в том же хранилище, поэтому переживает перезапуск. Служба
@@ -170,21 +246,41 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		log.Printf("расписание: %v", err)
 		return 1
 	}
+
+	// Группа собирается после регистрации модулей, поэтому её видно только
+	// через переменную: допуск к работам спрашивает её на каждом захвате.
+	var group *service.Group
+
 	disp.SetAllowedFunc(func(now time.Time) []jobs.Class {
-		return allowedNow(sched, meter, now)
+		return allowedNow(sched, meter, now, readyAll(group))
 	})
 
 	commands := process.NewRegistry()
 	reg := &registry{api: srv, jobs: jobReg, events: evReg, commands: commands}
 
 	// Состав служб известен только после регистрации модулей, поэтому модулю
-	// передаётся функция: к моменту запроса список уже собран.
+	// передаётся функция: к моменту запроса группа уже собрана.
 	var services []service.Service
-	running := func() []string {
-		return serviceNames(services)
+	states := func() []service.State {
+		if group == nil {
+			return nil
+		}
+		return group.States()
 	}
 
-	modules, err := selectModules(moduleList(disp, jw, running, evSched), cfg.Modules.Disabled)
+	modules, err := buildModules(deps{
+		disp:     disp,
+		journal:  jw,
+		states:   states,
+		events:   evSched,
+		slot:     slot,
+		settings: cfg.Modules.Settings,
+	})
+	if err != nil {
+		log.Printf("модули: %v", err)
+		return 1
+	}
+	modules, err = selectModules(modules, cfg.Modules.Disabled, cfg.Modules.Settings)
 	if err != nil {
 		log.Printf("настройки: %v", err)
 		return 1
@@ -211,7 +307,17 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	}
 	services = append(services, reg.services...)
 	services = append(services, disp, evSched, srv)
-	group := service.New(services...)
+	group = service.New(services...)
+	group.SetJournal(jw)
+
+	// Правило перезапуска отказавших служб: без него группа только сообщает
+	// об отказе, а процесс продолжает работу без службы.
+	delay, attempts, err := restartRule(cfg.Services.Restart)
+	if err != nil {
+		log.Printf("настройки: %v", err)
+		return 1
+	}
+	group.SetRestart(delay, attempts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -222,22 +328,12 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		go openBrowser(ctx, cfg.Server.Addr)
 	}
 
-	log.Printf("go+wex: http://%s", cfg.Server.Addr)
+	log.Printf("go+wex %s: http://%s", version.String(), cfg.Server.Addr)
 	if err := group.Run(ctx); err != nil {
 		log.Printf("остановка: %v", err)
 		return 1
 	}
 	return 0
-}
-
-// serviceNames — имена служб в порядке запуска: страница показывает состав
-// приложения как есть, без дополнительных описаний.
-func serviceNames(services []service.Service) []string {
-	names := make([]string, 0, len(services))
-	for _, s := range services {
-		names = append(names, s.Name())
-	}
-	return names
 }
 
 // openBrowser открывает страницу, дождавшись, что служба заняла адрес.
@@ -278,18 +374,22 @@ func browserCommand() string {
 	return "xdg-open"
 }
 
-func selectModules(all []core.Module, disabled []string) ([]core.Module, error) {
-	if len(disabled) == 0 {
-		return all, nil
-	}
-
+func selectModules(all []core.Module, disabled []string, settings map[string]json.RawMessage) ([]core.Module, error) {
 	known := make(map[string]bool, len(all))
 	for _, m := range all {
 		known[m.Name()] = true
 	}
+	for name := range settings {
+		if !known[name] {
+			return nil, fmt.Errorf("настройки модуля %q: модуль не объявлен; известны: %s", name, strings.Join(moduleNames(all), ", "))
+		}
+	}
 	for _, name := range disabled {
 		if !known[name] {
 			return nil, fmt.Errorf("модуль %q не объявлен; известны: %s", name, strings.Join(moduleNames(all), ", "))
+		}
+		if _, ok := settings[name]; ok {
+			return nil, fmt.Errorf("модуль %q выключен, а его настройки заданы", name)
 		}
 		delete(known, name)
 	}
@@ -314,13 +414,40 @@ func moduleNames(modules []core.Module) []string {
 	return names
 }
 
-// moduleList — единственное место, где приложение знает о модулях.
-func moduleList(disp *jobs.Dispatcher, jw journal.Writer, running func() []string, ev *events.Scheduler) []core.Module {
-	return []core.Module{
-		health.New(),
-		tasks.New(disp),
-		demo.New(disp, jw, running, ev),
+// deps — зависимости, которые получают модули. В режиме служб они
+// настоящие; в режиме подкоманды очередь открывает хранилище при первом
+// обращении, а службы событий нет: службы не поднимаются.
+type deps struct {
+	disp     *jobs.Dispatcher
+	journal  journal.Writer
+	states   func() []service.State
+	events   *events.Scheduler
+	slot     *gate.Gate
+	settings map[string]json.RawMessage
+}
+
+// buildModules собирает модули с зависимостями и их настройками. Это
+// единственное место, где приложение знает список модулей и то, какой
+// раздел настроек кому принадлежит.
+func buildModules(d deps) ([]core.Module, error) {
+	section := func(name string) json.RawMessage {
+		return d.settings[name]
 	}
+
+	healthModule, err := health.New(section("health"))
+	if err != nil {
+		return nil, err
+	}
+	tasksModule, err := tasks.New(d.disp, section("tasks"))
+	if err != nil {
+		return nil, err
+	}
+	demoModule, err := demo.New(d.disp, d.journal, d.states, d.events, d.slot, section("demo"))
+	if err != nil {
+		return nil, err
+	}
+
+	return []core.Module{healthModule, tasksModule, demoModule}, nil
 }
 
 // resolveDir выбирает каталог интерфейса.
@@ -360,12 +487,15 @@ func checkIndex(dir string) error {
 // это пустой приёмник: службы не поднимаются.
 type httpRegistrar interface {
 	HTTP(method, path string, h core.Handler)
+	HTTPRaw(method, path string, h http.Handler)
 }
 
 // discardHTTP — пустой приёмник маршрутов для режима подкоманды.
 type discardHTTP struct{}
 
 func (discardHTTP) HTTP(string, string, core.Handler) {}
+
+func (discardHTTP) HTTPRaw(string, string, http.Handler) {}
 
 // registry собирает возможности модуля: маршруты уходят HTTP-службе,
 // виды работ — реестру работ, сроки событий — реестру событий, службы —
@@ -382,6 +512,10 @@ func (r *registry) HTTP(method, path string, h core.Handler) {
 	r.api.HTTP(method, path, h)
 }
 
+func (r *registry) HTTPRaw(method, path string, h http.Handler) {
+	r.api.HTTPRaw(method, path, h)
+}
+
 func (r *registry) Job(kind string, spec jobs.Spec) error {
 	return r.jobs.Add(jobs.Kind(kind), spec)
 }
@@ -396,6 +530,55 @@ func (r *registry) Service(s service.Service) {
 
 func (r *registry) Command(name string, run core.CommandHandler) error {
 	return r.commands.Add(name, process.Handler(run))
+}
+
+// readyAll сообщает, готовы ли службы принимать работу. Пока служба
+// прогревается, фоновые работы не берутся: иначе первые из них уйдут
+// в отказ на пустом месте.
+func readyAll(g *service.Group) bool {
+	if g == nil {
+		return true
+	}
+	return g.Ready()
+}
+
+// restartRule переводит настройку перезапуска служб. Без правила группа
+// не перезапускает ничего: сколько пробовать — решение приложения.
+func restartRule(r config.Restart) (time.Duration, int, error) {
+	if r.Max <= 0 {
+		return 0, 0, nil
+	}
+
+	delay := time.Second
+	if r.After != "" {
+		d, err := time.ParseDuration(r.After)
+		if err != nil {
+			return 0, 0, err
+		}
+		delay = d
+	}
+	return delay, r.Max, nil
+}
+
+// serverTimeouts переводит сроки транспорта из настроек. Пустое значение
+// оставляет предел службы по умолчанию: строка настроек проверена при загрузке.
+func serverTimeouts(s config.Server) (time.Duration, time.Duration, error) {
+	var readHeader, idle time.Duration
+	var err error
+
+	if s.ReadHeaderTimeout != "" {
+		readHeader, err = time.ParseDuration(s.ReadHeaderTimeout)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if s.IdleTimeout != "" {
+		idle, err = time.ParseDuration(s.IdleTimeout)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	return readHeader, idle, nil
 }
 
 // scheduleRules переводит настройки в пороги расписания. Без правил
@@ -420,10 +603,10 @@ func scheduleRules(rules []config.ScheduleRule) ([]schedule.Rule, error) {
 }
 
 // allowedNow — классы, которые разборщик может взять сейчас: расписание
-// по простою, кроме фона, пока есть активный запрос.
-func allowedNow(s *schedule.Schedule, m *activity.Meter, now time.Time) []jobs.Class {
+// по простою, кроме фона, пока есть активный запрос или службы не готовы.
+func allowedNow(s *schedule.Schedule, m *activity.Meter, now time.Time, ready bool) []jobs.Class {
 	classes := s.Allowed(m.LastActive(), now)
-	if !m.Busy() {
+	if !m.Busy() && ready {
 		return classes
 	}
 

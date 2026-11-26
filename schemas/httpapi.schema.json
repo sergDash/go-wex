@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-6.schema.json",
+  "$id": "https://go-wex.local/httpapi-10.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
@@ -20,6 +20,22 @@
           "type": "boolean",
           "default": false,
           "description": "открыть страницу в браузере после запуска; в образце включено"
+        },
+        "readHeaderTimeout": {
+          "type": "string",
+          "minLength": 1,
+          "description": "предел чтения заголовков запроса, например 5s; пусто — по умолчанию"
+        },
+        "idleTimeout": {
+          "type": "string",
+          "minLength": 1,
+          "description": "предел простоя соединения, например 60s; пусто — по умолчанию"
+        },
+        "maxBody": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "предел тела запроса в байтах; ноль — без предела"
         }
       }
     },
@@ -44,6 +60,44 @@
           "type": "string",
           "minLength": 1,
           "description": "файл хранилища относительно каталога запуска"
+        }
+      }
+    },
+    "jobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "правило хранения очереди работ",
+      "properties": {
+        "keep": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "сколько завершённых строк очереди держать; ноль оставляет все"
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "правила для внутренних служб",
+      "properties": {
+        "restart": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "перезапуск отказавшей службы",
+          "properties": {
+            "after": {
+              "type": "string",
+              "minLength": 1,
+              "description": "сколько ждать перед повтором, например 1s"
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "сколько раз пробовать; ноль означает, что перезапуска нет"
+            }
+          }
         }
       }
     },
@@ -86,6 +140,13 @@
             "minLength": 1
           },
           "description": "имена выключенных модулей; неизвестное имя — ошибка"
+        },
+        "settings": {
+          "type": "object",
+          "description": "разделы настроек по имени модуля; форму раздела знает модуль",
+          "additionalProperties": {
+            "type": "object"
+          }
         }
       }
     },

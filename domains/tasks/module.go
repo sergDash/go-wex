@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"go-wex/engine/config"
 	"go-wex/engine/core"
 	"go-wex/engine/jobs"
 )
@@ -26,8 +27,16 @@ type module struct {
 	disp *jobs.Dispatcher
 }
 
-// New отдаёт модуль для списка в точке сборки.
-func New(disp *jobs.Dispatcher) core.Module { return module{disp: disp} }
+// New отдаёт модуль для списка в точке сборки. settings — раздел
+// modules.settings.tasks: своих настроек у модуля нет, поэтому любой ключ
+// в нём — ошибка.
+func New(disp *jobs.Dispatcher, settings json.RawMessage) (core.Module, error) {
+	var none struct{}
+	if err := config.DecodeSection(settings, &none); err != nil {
+		return nil, fmt.Errorf("tasks: настройки: %w", err)
+	}
+	return module{disp: disp}, nil
+}
 
 func (module) Name() string { return "tasks" }
 
@@ -120,7 +129,11 @@ func (m module) enqueue(r *http.Request) (any, error) {
 		return nil, &core.Error{Status: http.StatusBadRequest, Message: "class: interactive или background"}
 	}
 
-	id, err := m.disp.Enqueue(r.Context(), kind, in, in.Class)
+	id, err := m.disp.Enqueue(r.Context(), jobs.Request{
+		Kind:    kind,
+		Payload: in,
+		Class:   in.Class,
+	})
 	if err != nil {
 		return nil, err
 	}

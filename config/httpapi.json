@@ -1,7 +1,10 @@
 {
   "server": {
     "addr": "127.0.0.1:4480",
-    "open": true
+    "open": true,
+    "readHeaderTimeout": "5s",
+    "idleTimeout": "60s",
+    "maxBody": 1048576
   },
   "interface": {
     "dir": "interface"
@@ -9,14 +12,26 @@
   "store": {
     "path": "data/store.json"
   },
+  "jobs": {
+    "keep": 500
+  },
+  "services": {
+    "restart": {
+      "after": "1s",
+      "max": 3
+    }
+  },
   "schedule": {
-    "rules": [
-      {"after": "0s", "class": "interactive"},
-      {"after": "10s", "class": "background"}
-    ]
+    "rules": []
   },
   "modules": {
-    "disabled": []
+    "disabled": [],
+    "settings": {
+      "demo": {
+        "tickPeriod": "10s",
+        "minIdle": "3s"
+      }
+    }
   },
   "journal": {
     "path": "data/journal.log",

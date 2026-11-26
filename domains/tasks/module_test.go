@@ -36,6 +36,9 @@ func (r *testRegistry) HTTP(method, path string, h core.Handler) {
 	r.routes[method+" "+path] = h
 }
 
+// HTTPRaw не используется: модуль задач сырых маршрутов не объявляет.
+func (r *testRegistry) HTTPRaw(string, string, http.Handler) {}
+
 func (r *testRegistry) Job(kind string, spec jobs.Spec) error {
 	r.specs[jobs.Kind(kind)] = spec
 	return nil

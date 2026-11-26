@@ -184,3 +184,50 @@ func TestJournalSettings(t *testing.T) {
 		t.Fatalf("нулевой размер: %v", err)
 	}
 }
+
+// TestTransportSettings — сроки транспорта читаются и проверяются: опечатка
+// в сроке и отрицательный предел тела дают ошибку.
+func TestTransportSettings(t *testing.T) {
+	ok := write(t, `{
+		"server": {
+			"addr": "127.0.0.1:9000",
+			"readHeaderTimeout": "3s",
+			"idleTimeout": "90s",
+			"maxBody": 1048576
+		},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"}
+	}`)
+	c, err := LoadHTTPAPI(ok)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Server.ReadHeaderTimeout != "3s" || c.Server.IdleTimeout != "90s" {
+		t.Fatalf("транспорт: %+v", c.Server)
+	}
+	if c.Server.MaxBody == nil || *c.Server.MaxBody != 1048576 {
+		t.Fatalf("предел тела: %v", c.Server.MaxBody)
+	}
+
+	for name, body := range map[string]string{
+		"срок": `{
+			"server": {"addr": "127.0.0.1:9000", "readHeaderTimeout": "три секунды"},
+			"interface": {"dir": "interface"},
+			"store": {"path": "data/store.json"}
+		}`,
+		"ноль": `{
+			"server": {"addr": "127.0.0.1:9000", "idleTimeout": "0s"},
+			"interface": {"dir": "interface"},
+			"store": {"path": "data/store.json"}
+		}`,
+		"предел": `{
+			"server": {"addr": "127.0.0.1:9000", "maxBody": -1},
+			"interface": {"dir": "interface"},
+			"store": {"path": "data/store.json"}
+		}`,
+	} {
+		if _, err := LoadHTTPAPI(write(t, body)); err == nil {
+			t.Fatalf("%s: ждали ошибку", name)
+		}
+	}
+}

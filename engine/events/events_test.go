@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -21,9 +22,10 @@ var base = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 
 // recorded — одна постановка, увиденная очередью-двойником.
 type recorded struct {
-	kind    jobs.Kind
-	payload any
-	class   jobs.Class
+	kind      jobs.Kind
+	payload   any
+	class     jobs.Class
+	notBefore time.Time
 }
 
 // recorder — очередь-двойник: запоминает постановки и умеет отказывать,
@@ -35,14 +37,19 @@ type recorder struct {
 	known map[jobs.Kind]bool
 }
 
-func (r *recorder) Enqueue(_ context.Context, kind jobs.Kind, payload any, class jobs.Class) (string, error) {
+func (r *recorder) Enqueue(_ context.Context, req jobs.Request) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.fail != nil {
 		return "", r.fail
 	}
-	r.calls = append(r.calls, recorded{kind: kind, payload: payload, class: class})
+	r.calls = append(r.calls, recorded{
+		kind:      req.Kind,
+		payload:   req.Payload,
+		class:     req.Class,
+		notBefore: req.NotBefore,
+	})
 	return fmt.Sprintf("job-%d", len(r.calls)), nil
 }
 
@@ -291,6 +298,11 @@ func TestPayloadAndClassReachQueue(t *testing.T) {
 	if got, want := call.class, jobs.ClassInteractive; got != want {
 		t.Fatalf("поставлен класс %q, ожидался %q", got, want)
 	}
+	// Срок события становится сроком работы: по нему разборщик решает,
+	// когда работу брать, и по нему видно, насколько она опоздала.
+	if got, want := call.notBefore, base.Add(time.Hour); !got.Equal(want) {
+		t.Fatalf("срок работы %s, ожидался %s", got, want)
+	}
 	payload, ok := call.payload.(map[string]string)
 	if !ok {
 		t.Fatalf("нагрузка %T, ожидалась map[string]string", call.payload)
@@ -513,5 +525,98 @@ func TestServiceStops(t *testing.T) {
 	defer cancel()
 	if err := s.Stop(stopCtx); err != nil {
 		t.Fatalf("остановка службы: %v", err)
+	}
+}
+
+// mapState — хранилище сроков в памяти: показывает, что службе событий
+// не нужен файл движка, достаточно четырёх операций.
+type mapState struct {
+	mu   sync.Mutex
+	data map[string]map[string]json.RawMessage
+}
+
+func newMapState() *mapState {
+	return &mapState{data: map[string]map[string]json.RawMessage{}}
+}
+
+func (m *mapState) Get(collection, key string, dst any) (bool, error) {
+	m.mu.Lock()
+	raw, ok := m.data[collection][key]
+	m.mu.Unlock()
+
+	if !ok {
+		return false, nil
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *mapState) Put(collection, key string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	col := m.data[collection]
+	if col == nil {
+		col = map[string]json.RawMessage{}
+		m.data[collection] = col
+	}
+	col[key] = raw
+	return nil
+}
+
+func (m *mapState) Delete(collection, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data[collection], key)
+	return nil
+}
+
+func (m *mapState) Keys(collection string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	keys := make([]string, 0, len(m.data[collection]))
+	for key := range m.data[collection] {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestSchedulerOnOwnState — сроки живут в любом хранилище с четырьмя
+// операциями: файл движка не обязателен.
+func TestSchedulerOnOwnState(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add("beat", Rule{Period: time.Hour}); err != nil {
+		t.Fatalf("объявление вида: %v", err)
+	}
+	rec := &recorder{}
+	state := newMapState()
+	s := NewScheduler(state, rec, reg)
+
+	ctx := context.Background()
+	if _, err := s.Step(ctx, base); err != nil {
+		t.Fatalf("первый шаг: %v", err)
+	}
+	if rec.count() != 0 {
+		t.Fatalf("сработало раньше срока: %d", rec.count())
+	}
+	if len(state.Keys(collection)) != 1 {
+		t.Fatalf("срок не записан: %v", state.Keys(collection))
+	}
+
+	fired, err := s.Step(ctx, base.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("шаг в срок: %v", err)
+	}
+	if len(fired) != 1 || rec.count() != 1 {
+		t.Fatalf("срабатывание: %v, постановок %d", fired, rec.count())
 	}
 }

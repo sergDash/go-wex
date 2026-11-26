@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,15 +18,7 @@ import (
 	"go-wex/engine/jobs"
 	"go-wex/engine/process"
 	"go-wex/engine/schedule"
-	"go-wex/engine/service"
 )
-
-// namedService — служба с заданным именем: для проверки порядка в списке.
-type namedService struct{ name string }
-
-func (s namedService) Name() string              { return s.name }
-func (namedService) Start(context.Context) error { return nil }
-func (namedService) Stop(context.Context) error  { return nil }
 
 // namedModule — модуль с заданным именем: для проверки отбора модулей.
 type namedModule struct{ name string }
@@ -38,12 +31,12 @@ func (namedModule) Register(core.Registry) error { return nil }
 func TestSelectModules(t *testing.T) {
 	all := []core.Module{namedModule{"health"}, namedModule{"tasks"}, namedModule{"demo"}}
 
-	got, err := selectModules(all, nil)
+	got, err := selectModules(all, nil, nil)
 	if err != nil || len(got) != 3 {
 		t.Fatalf("без отключений: %d модулей, ошибка %v", len(got), err)
 	}
 
-	got, err = selectModules(all, []string{"demo"})
+	got, err = selectModules(all, []string{"demo"}, nil)
 	if err != nil {
 		t.Fatalf("отключение demo: %v", err)
 	}
@@ -51,7 +44,7 @@ func TestSelectModules(t *testing.T) {
 		t.Fatalf("после отключения: %v", moduleNames(got))
 	}
 
-	_, err = selectModules(all, []string{"dmeo"})
+	_, err = selectModules(all, []string{"dmeo"}, nil)
 	if err == nil {
 		t.Fatal("опечатка в имени модуля принята")
 	}
@@ -60,12 +53,22 @@ func TestSelectModules(t *testing.T) {
 	}
 }
 
-// TestServiceNames — службы перечисляются в порядке запуска: страница
-// показывает состав приложения в том виде, в каком его собрал движок.
-func TestServiceNames(t *testing.T) {
-	names := serviceNames([]service.Service{namedService{"journal"}, namedService{"http"}})
-	if len(names) != 2 || names[0] != "journal" || names[1] != "http" {
-		t.Fatalf("имена служб: %v", names)
+// TestRestartRule — правило перезапуска читается из настроек: без предела
+// перезапуска нет, срок по умолчанию — одна секунда.
+func TestRestartRule(t *testing.T) {
+	delay, attempts, err := restartRule(config.Restart{})
+	if err != nil || delay != 0 || attempts != 0 {
+		t.Fatalf("без правила: delay=%s attempts=%d err=%v", delay, attempts, err)
+	}
+
+	delay, attempts, err = restartRule(config.Restart{Max: 2})
+	if err != nil || delay != time.Second || attempts != 2 {
+		t.Fatalf("срок по умолчанию: delay=%s attempts=%d err=%v", delay, attempts, err)
+	}
+
+	delay, attempts, err = restartRule(config.Restart{After: "3s", Max: 1})
+	if err != nil || delay != 3*time.Second || attempts != 1 {
+		t.Fatalf("свой срок: delay=%s attempts=%d err=%v", delay, attempts, err)
 	}
 }
 
@@ -157,7 +160,8 @@ func TestScheduleRules(t *testing.T) {
 	}
 }
 
-// TestAllowedNow — пока запрос активен, фон убирается из набора классов.
+// TestAllowedNow — пока запрос активен или службы не готовы, фон убирается
+// из набора классов.
 func TestAllowedNow(t *testing.T) {
 	clk := clock.NewManual(time.Unix(1000, 0))
 	meter := activity.New(clk)
@@ -169,20 +173,65 @@ func TestAllowedNow(t *testing.T) {
 		t.Fatalf("schedule.New: %v", err)
 	}
 
-	got := allowedNow(sched, meter, clk.Now())
+	got := allowedNow(sched, meter, clk.Now(), true)
 	if len(got) != 2 {
 		t.Fatalf("свободно: %v", got)
 	}
 
 	done := meter.Begin()
-	got = allowedNow(sched, meter, clk.Now())
+	got = allowedNow(sched, meter, clk.Now(), true)
 	if len(got) != 1 || got[0] != jobs.ClassInteractive {
 		t.Fatalf("запрос активен: %v", got)
 	}
 
 	done()
-	got = allowedNow(sched, meter, clk.Now())
+	got = allowedNow(sched, meter, clk.Now(), true)
 	if len(got) != 2 {
 		t.Fatalf("после запроса: %v", got)
+	}
+
+	got = allowedNow(sched, meter, clk.Now(), false)
+	if len(got) != 1 || got[0] != jobs.ClassInteractive {
+		t.Fatalf("службы не готовы: %v", got)
+	}
+}
+
+// TestModuleSettings — настройки принимаются только для объявленных и
+// включённых модулей: опечатка и мёртвая настройка — ошибка.
+func TestModuleSettings(t *testing.T) {
+	all := []core.Module{namedModule{"health"}, namedModule{"tasks"}, namedModule{"demo"}}
+	ok := map[string]json.RawMessage{"demo": json.RawMessage(`{"minIdle":"1s"}`)}
+
+	got, err := selectModules(all, nil, ok)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("с настройками: %d модулей, ошибка %v", len(got), err)
+	}
+
+	if _, err := selectModules(all, nil, map[string]json.RawMessage{"dmeo": json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("настройки неизвестного модуля приняты")
+	}
+	if _, err := selectModules(all, []string{"demo"}, ok); err == nil {
+		t.Fatal("настройки выключенного модуля приняты")
+	}
+}
+
+// TestBuildModulesSettings — настройки доходят до модуля, а ошибка разбора
+// останавливает сборку с понятным текстом.
+func TestBuildModulesSettings(t *testing.T) {
+	modules, err := buildModules(deps{settings: map[string]json.RawMessage{
+		"demo": json.RawMessage(`{"tickPeriod":"2s"}`),
+	}})
+	if err != nil {
+		t.Fatalf("buildModules: %v", err)
+	}
+	if len(modules) != 3 {
+		t.Fatalf("модулей: %d", len(modules))
+	}
+
+	_, err = buildModules(deps{settings: map[string]json.RawMessage{
+		"demo": json.RawMessage(`{"period":"2s"}`),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "demo") {
+		t.Fatalf("ошибка настроек: %v", err)
 	}
 }

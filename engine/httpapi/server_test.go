@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -92,6 +94,31 @@ func TestActivityCounts(t *testing.T) {
 	}
 }
 
+// TestActivityIgnoresStatic — загрузка статики не считается активностью:
+// иначе открытая вкладка откладывала бы фоновую работу навсегда.
+func TestActivityIgnoresStatic(t *testing.T) {
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("панель")}}
+	s := New("127.0.0.1:0", assets)
+	a := &activityFake{}
+	s.SetActivity(a)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статика: код %d", rec.Code)
+	}
+	if a.begins != 0 || a.ends != 0 {
+		t.Fatalf("статика прошла через учёт: начал=%d завершил=%d", a.begins, a.ends)
+	}
+
+	s.HTTP("GET", "/api/check", func(*http.Request) (any, error) { return "ok", nil })
+	apiRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(apiRec, httptest.NewRequest(http.MethodGet, "/api/check", nil))
+	if a.begins != 1 || a.ends != 1 {
+		t.Fatalf("маршрут модуля: начал=%d завершил=%d", a.begins, a.ends)
+	}
+}
+
 // journalFake — журнал для проверки: запоминает записи.
 type journalFake struct {
 	sources []string
@@ -169,5 +196,142 @@ func TestStartStop(t *testing.T) {
 
 	if err := s.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// TestRawRoute — сырой маршрут пишет ответ сам: конверт не добавляется,
+// поэтому поток и скачивание возможны.
+func TestRawRoute(t *testing.T) {
+	s := New("127.0.0.1:0", fstest.MapFS{})
+	s.HTTPRaw("GET", "/api/stream", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("порция"))
+	}))
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stream", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код: %d", rec.Code)
+	}
+	if body := rec.Body.String(); body != "порция" {
+		t.Fatalf("тело: %q", body)
+	}
+}
+
+// TestErrorData — модуль называет данные ошибки, движок кладёт их рядом
+// с текстом: по ним форма подсвечивает поля.
+func TestErrorData(t *testing.T) {
+	s := New("127.0.0.1:0", fstest.MapFS{})
+	s.HTTP("POST", "/api/form", func(*http.Request) (any, error) {
+		return nil, &core.Error{
+			Status:  http.StatusBadRequest,
+			Message: "text обязателен",
+			Data:    map[string]any{"code": "text_required", "fields": []string{"text"}},
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/form", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("код: %d", rec.Code)
+	}
+
+	var body struct {
+		Error string `json:"error"`
+		Data  struct {
+			Code   string   `json:"code"`
+			Fields []string `json:"fields"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if body.Error == "" || body.Data.Code != "text_required" || len(body.Data.Fields) != 1 {
+		t.Fatalf("тело ошибки: %s", rec.Body.String())
+	}
+}
+
+// TestMiddleware — посредник стоит над всеми запросами: без пропуска
+// обработчик модуля не вызывается, статика тоже закрыта.
+func TestMiddleware(t *testing.T) {
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("панель")}}
+	s := New("127.0.0.1:0", assets)
+
+	called := false
+	s.HTTP("GET", "/api/check", func(*http.Request) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	s.SetMiddleware(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer token" {
+				http.Error(w, "нет доступа", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/check", nil))
+	if rec.Code != http.StatusUnauthorized || called {
+		t.Fatalf("без пропуска: код %d, обработчик вызван=%v", rec.Code, called)
+	}
+
+	staticRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(staticRec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if staticRec.Code != http.StatusUnauthorized {
+		t.Fatalf("статика без пропуска: код %d", staticRec.Code)
+	}
+
+	passRec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/check", nil)
+	req.Header.Set("Authorization", "Bearer token")
+	s.Handler().ServeHTTP(passRec, req)
+	if passRec.Code != http.StatusOK || !called {
+		t.Fatalf("с пропуском: код %d, обработчик вызван=%v", passRec.Code, called)
+	}
+}
+
+// TestBodyLimit — предел тела закрывает запрос раньше, чем он займёт память.
+func TestBodyLimit(t *testing.T) {
+	s := New("127.0.0.1:0", fstest.MapFS{})
+	s.SetMaxBody(4)
+	s.HTTPRaw("POST", "/api/raw", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/raw", strings.NewReader("0123456789"))
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("код: %d", rec.Code)
+	}
+}
+
+// TestBodyLimitStatus — предел тела виден клиенту как 413, даже если модуль
+// вернул ошибку чтения как обычную.
+func TestBodyLimitStatus(t *testing.T) {
+	s := New("127.0.0.1:0", fstest.MapFS{})
+	s.SetMaxBody(4)
+	s.HTTP("POST", "/api/form", func(r *http.Request) (any, error) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			// Так модуль оборачивает ошибку чтения: причина остаётся в цепочке.
+			return nil, &core.Error{Status: http.StatusBadRequest, Message: "тело: " + err.Error(), Err: err}
+		}
+		return body, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/form", strings.NewReader(`{"text":"длинно"}`))
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("код: %d, тело %s", rec.Code, rec.Body.String())
 	}
 }
