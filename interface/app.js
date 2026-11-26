@@ -7,7 +7,41 @@
 // 4. Ответ ложится в поля стейта, и wex перерисовывает изменившиеся узлы.
 //    Обновление идёт по кнопке, без опроса: канал обновлений — сценарий
 //    SC-16, он ещё не сделан.
+//
+// --- Аудит wex, 2026-11-26 ---
+//
+// Помеченные ниже места («Аудит wex») опираются на поведение ядра wex,
+// а не на договорённость из книги. Это НЕ задание на переделку: сейчас всё
+// работает, код остаётся как есть. Это список для перепроверки, если wex
+// обновят: сначала прочитать эти пункты, потом проверять списки руками.
+//
+// Проверено на сборке wex 3.1.1 из interface/vendor/wex.min.js
+// (sha256 06a13649…30f4; файл побайтно совпадает с dist форка sergDash/wex,
+// коммит a584ca0; в апстриме wemmbley/wex ветка 3.x, коммит c3926b2 —
+// поведение в перечисленных местах то же).
+//
+// Что перепроверять после обновления:
+// 1. w-on подставляет элемент, на котором нашёлся обработчик, в
+//    event.currentTarget. На этом стоят все pick в компонентах.
+// 2. Хуки $init/$mount/$unmount принимают одноуровневую функцию
+//    .on('$mount', function (state) {...}), в this — вью экземпляра.
+//    Двухуровневая форма (return function () {}) у хуков молчит; поэтому
+//    watchOutside и висит на первом toggle, а не на $mount.
+// 3. Пропс кладётся в состояние по ссылке, поэтому массив из :items общий
+//    с родителем; ключ, которого нет в состоянии компонента, отбрасывается
+//    молча — опечатка в имени пропса ничего не сообщает.
+// 4. Значения пунктов проходят через data-value и возвращаются строкой,
+//    хотя в items они могут быть числами.
+//
+// Быстрая проверка после обновления: открыть панель, по очереди открыть все
+// три списка, выбрать пункт в каждом, кликнуть мимо. Подпись выбранного
+// должна меняться, в консоли — ни одной ошибки; в инструментах разработчика
+// видно, что на документе столько же click-слушателей, сколько было.
 $(function () {
+    // streamSource — открытый поток порций. Объект живёт вне стейта:
+    // это транспорт, а не данные страницы.
+    var streamSource = null;
+
     var colors = ['красный', 'зелёный', 'синий', 'жёлтый'];
     var cities = ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург'];
     var tags = ['гость', 'подписчик', 'автор', 'редактор'];
@@ -39,6 +73,16 @@ $(function () {
     // watchOutside закрывает список компонента кликом мимо своего окна:
     // клик по другому списку — старый или компонент — тоже считается мимо,
     // поэтому одновременно открыт только один.
+    //
+    // Аудит wex 2026-11-26: слушатель вешается один раз за жизнь страницы и
+    // не снимается — removeEventListener в этом файле не встречается. Для
+    // статичной панели это нормально. Если компонент окажется внутри w-if или
+    // w-for и начнёт пересоздаваться, слушатели накопятся вместе с замыканием
+    // на view и state: на документе сейчас по одному click на каждый открытый
+    // компонент плюс один от страницы. Не переделка, а напоминание: после
+    // обновления wex подписку уместно перенести в $mount, а снятие — в
+    // $unmount (форма хука одноуровневая, в this — вью экземпляра).
+    // WeakSet остаётся страховкой от повторной подписки на каждом toggle.
     var watched = new WeakSet();
 
     function watchOutside(view, state) {
@@ -69,6 +113,13 @@ $(function () {
         services: [],
         events: [],
         deletable: [],
+        gate: { capacity: 0, active: 0, peak: 0 },
+        generateMs: 1500,
+        generateResult: '',
+        streamCount: 5,
+        streamMs: 300,
+        streamParts: [],
+        streamDone: false,
         eventText: 'напоминание',
         eventSeconds: 10,
         selects: {
@@ -89,6 +140,8 @@ $(function () {
         cityMatches: cities.slice(),
         tags: tags,
         text: 'раз',
+        delaySeconds: 0,
+        slowMs: 0,
         failure: ''
     });
 
@@ -96,6 +149,20 @@ $(function () {
     // экземпляры, состояние у каждого своё, выбранное значение уходит
     // родителю событием change. Внешняя функция метода вызывается с вью
     // в this, поэтому emit отправляется через сохранённую ссылку.
+    //
+    // Аудит wex 2026-11-26: pick читает event.currentTarget.dataset.value.
+    // Это работает потому, что w-on сам подставляет найденный элемент в
+    // currentTarget — поведение ядра при делегировании, а не правило из книги.
+    // Если после обновления wex семантика события изменится (например, в this
+    // окажется вью, а элемент придётся брать отдельно), этот pick и два
+    // однотипных ниже отдадут undefined молча, без ошибки в консоли.
+    // Проверка после обновления: открыть список, выбрать пункт, убедиться, что
+    // подпись в списке сменилась и наружу ушло значение.
+    // Запись, не зависящая от этой подстановки: event.target.closest('[data-value]').
+    // Значения проходят через data-value, то есть через DOM-атрибут, и
+    // возвращаются строкой. Пока в items строки (цвета, города, теги) —
+    // сходится; с числовыми значениями подсветка value === item.value в
+    // шаблоне перестанет совпадать.
     var xSelect = $('#x-select')
         .state(function () {
             return { items: [], value: '', open: false };
@@ -121,6 +188,22 @@ $(function () {
 
     // x-select-search — список с поиском: пункты фильтруются по вводу,
     // поле получает фокус при открытии.
+    //
+    // Аудит wex 2026-11-26: matches — производное состояние, оно считается
+    // только при открытии и при вводе. Если родитель подменит :items, пока
+    // меню открыто, список продолжит показывать старые пункты до закрытия и
+    // повторного открытия (проверено). Сейчас items статические, поэтому не
+    // проявляется. Когда список станет обновляемым из сети, поле matches
+    // придётся либо пересчитывать по $change (следить за items и query), либо
+    // убрать, а фильтровать прямо в шаблоне:
+    // w-for="item in items | byQuery:query traceby item.value" — фильтры в
+    // выражении w-for работают.
+    // Имя метода filter совпадает с именем шаблонного view.filter(); здесь это
+    // действие для w-on, а не фильтр шаблона — при чтении не путать.
+    // Аудит wex 2026-11-26: w-focus объявлена ещё и на вью страницы (ниже,
+    // перед $mount). Директивы не наследуются между вью, поэтому копия нужна;
+    // но два одинаковых объявления разъедутся при правке. Если появится третий
+    // список, регистрировать глобально: Wex.directive('w-focus', ...).
     var xSelectSearch = $('#x-select-search')
         .state(function () {
             return { items: [], matches: [], value: '', open: false, query: '' };
@@ -159,6 +242,13 @@ $(function () {
 
     // x-select-multi — множественный выбор: пункт переключается, список
     // остаётся открытым, наружу уходит массив значений.
+    //
+    // Аудит wex 2026-11-26: шаблон обращается с value как с массивом
+    // (value.join, value.includes). Если в :value придёт не массив, выражения
+    // шаблона будут падать на каждом рендере. Переключение пункта — тот же
+    // алгоритм, что в pickSelect по ветке name === 'tags' выше: править нужно
+    // оба места, иначе разъедутся. Значение пункта, как и в двух списках выше,
+    // приходит строкой из data-value.
     var xSelectMulti = $('#x-select-multi')
         .state(function () {
             return { items: [], value: [], open: false };
@@ -224,18 +314,32 @@ $(function () {
                 return response.json();
             })
             .then(function (body) {
-                const { result, error } = body;
+                const { result, error, data } = body;
 
                 if (error) {
-                    throw new Error(error);
+                    // Данные ошибки кладутся в объект исключения: по ним форма
+                    // показывает, какие поля исправить, а не только текст.
+                    const failure = new Error(error);
+                    failure.data = data;
+                    throw failure;
                 }
                 return result;
             });
     }
 
+    // describeError собирает текст отказа: если модуль прислал поля, они
+    // называются рядом с сообщением.
+    function describeError(error) {
+        if (!error.data || !error.data.fields || !error.data.fields.length) {
+            return error.message;
+        }
+        return error.message + ': ' + error.data.fields.join(', ');
+    }
+
     // rowState приводит строку очереди к полям стейта. Имена совпадают
     // с ответом; время показывается до секунд, а пустое место
-    // в столбце «Начата» — прочерком.
+    // в столбце «Начата» — прочерком. Срок постановки пустой, когда работа
+    // доступна сразу, поэтому в столбце стоит слово, а не прочерк.
     function rowState(row) {
         return {
             id: row.id,
@@ -243,6 +347,7 @@ $(function () {
             status: row.status,
             text: row.text,
             attempts: row.attempts,
+            notBefore: momentText(row.notBefore, 'сразу'),
             createdAt: momentText(row.createdAt, '—'),
             startedAt: momentText(row.startedAt, '—')
         };
@@ -310,6 +415,28 @@ $(function () {
             });
     }
 
+    // serviceState приводит состояние службы к полям таблицы: булевы
+    // значения показываются словами, пустая причина отказа — прочерком.
+    function serviceState(row) {
+        return {
+            name: row.name,
+            running: row.running ? 'да' : 'нет',
+            ready: row.ready ? 'да' : 'нет',
+            restarts: row.restarts,
+            failure: row.failure || '—'
+        };
+    }
+
+    // loadServices перечитывает состояние служб: по нему видно, что работает,
+    // что отказало и сколько было перезапусков.
+    function loadServices(state) {
+        return call('/api/services')
+            .then(function (rows) {
+                state.services = rows.map(serviceState);
+                state.failure = '';
+            });
+    }
+
     // snapshot читает связь, снимок демо, очередь и список служб одним
     // заходом: запросы идут параллельно, шаблон перерисовывается один раз.
     function snapshot(state) {
@@ -334,8 +461,9 @@ $(function () {
                 state.ok = health.ok;
                 state.status = health.status;
                 state.demo = demo;
+                state.gate = demo.gate;
                 state.jobs = rows.map(rowState);
-                state.services = services;
+                state.services = services.map(serviceState);
                 state.events = events.map(eventState);
                 state.deletable = deletableRows(events);
                 state.failure = '';
@@ -390,7 +518,7 @@ $(function () {
                     return loadJobs(state);
                 })
                 .catch(function (error) {
-                    state.failure = error.message;
+                    state.failure = describeError(error);
                 });
         };
     });
@@ -416,7 +544,7 @@ $(function () {
                     return loadEvents(state);
                 })
                 .catch(function (error) {
-                    state.failure = error.message;
+                    state.failure = describeError(error);
                 });
         };
     });
@@ -498,19 +626,24 @@ $(function () {
     });
 
     // enqueue ставит работу и перечитывает очередь: поставленная строка
-    // появляется сверху вместе со своим статусом и временами.
+    // появляется сверху вместе со своим статусом и временами. Числа из
+    // полей ввода приходят строками, поэтому приводятся здесь, а не на сервере.
     view.method('enqueue', function (state) {
         return function () {
             call('/api/demo/jobs', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: state.text })
+                body: JSON.stringify({
+                    text: state.text,
+                    delaySeconds: Number(state.delaySeconds) || 0,
+                    slowMs: Number(state.slowMs) || 0
+                })
             })
                 .then(function () {
                     return loadJobs(state);
                 })
                 .catch(function (error) {
-                    state.failure = error.message;
+                    state.failure = describeError(error);
                 });
         };
     });
@@ -525,6 +658,107 @@ $(function () {
         };
     });
 
+    // generateNow — синхронный контур хода: ответ приходит, когда слот
+    // свободен и работа закончена. Время ожидания слота и есть признак
+    // столкновения — второй ход ждал первого.
+    view.method('generateNow', function (state) {
+        return function () {
+            call('/api/demo/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ms: Number(state.generateMs) || 0 })
+            })
+                .then(function (res) {
+                    state.gate = res.gate;
+                    state.generateResult = 'ждал слот ' + res.waitedMs + ' мс, работал ' + res.tookMs + ' мс';
+                })
+                .catch(function (error) {
+                    state.failure = describeError(error);
+                });
+        };
+    });
+
+    // generateQueued — тот же ход, но работой: ответ приходит сразу
+    // с номером, а выполняет его разборщик, когда слот свободен.
+    view.method('generateQueued', function (state) {
+        return function () {
+            call('/api/demo/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ms: Number(state.generateMs) || 0, queued: true })
+            })
+                .then(function (res) {
+                    state.gate = res.gate;
+                    state.generateResult = 'ход ' + res.id + ' поставлен в очередь';
+                    return loadJobs(state);
+                })
+                .catch(function (error) {
+                    state.failure = describeError(error);
+                });
+        };
+    });
+
+    // crashWatch просит службу упасть на следующем тике. Список служб
+    // обновляется с задержкой: группа ждёт срок перед перезапуском, и сразу
+    // после нажатия состояние ещё старое.
+    view.method('crashWatch', function (state) {
+        return function () {
+            call('/api/demo/watch/crash', { method: 'POST' })
+                .then(function () {
+                    setTimeout(function () {
+                        loadServices(state);
+                    }, 1800);
+                })
+                .catch(function (error) {
+                    state.failure = describeError(error);
+                });
+        };
+    });
+
+    // startStream открывает поток порций и складывает их в стейт по мере
+    // прихода. Соединение живёт вне стейта: это транспорт, а не данные.
+    view.method('startStream', function (state) {
+        return function () {
+            if (streamSource) {
+                streamSource.close();
+                streamSource = null;
+            }
+
+            state.streamParts = [];
+            state.streamDone = false;
+
+            const parts = Number(state.streamCount) || 5;
+            const ms = Number(state.streamMs) || 0;
+            const source = new EventSource('/api/demo/stream?parts=' + parts + '&ms=' + ms);
+            streamSource = source;
+
+            source.onmessage = function (event) {
+                const item = JSON.parse(event.data);
+
+                if (item.done) {
+                    source.close();
+                    streamSource = null;
+                    state.streamDone = true;
+                    return;
+                }
+                state.streamParts = state.streamParts.concat([
+                    { id: item.part, text: 'порция ' + item.part }
+                ]);
+            };
+
+            source.onerror = function () {
+                // Ошибка приходит и при собственном закрытии, поэтому
+                // проверяется, что поток всё ещё тот же.
+                if (streamSource !== source) {
+                    return;
+                }
+                source.close();
+                streamSource = null;
+                state.failure = 'поток прерван';
+            };
+        };
+    });
+
     // w-stick — держать прокрутку в конце: таблица растёт вниз, и после
     // каждого обновления нужно видеть последние строки. Директива живёт
     // в разметке, логика по-прежнему меняет только стейт.
@@ -534,12 +768,22 @@ $(function () {
 
     // w-focus ставит курсор в поле, когда оно появляется: поиск готов
     // к вводу сразу после открытия списка.
+    // Аудит wex 2026-11-26: второе объявление той же директивы — на вью
+    // компонента x-select-search выше. Директивы между вью не наследуются,
+    // поэтому копия нужна, но две реализации одного поведения при правке
+    // разъедутся; при появлении третьего списка вынести в Wex.directive().
     view.directive('w-focus', null, function ($el) {
         $el[0].focus();
     });
 
     // Первый снимок читается сразу после появления страницы: $mount —
     // документированное место для начальной загрузки данных.
+    //
+    // Аудит wex 2026-11-26: здесь форма хука правильная и требует проверки
+    // после обновления: обработчик — одна функция, state первым аргументом,
+    // this — вью. Внешняя функция, возвращающая function () {}, у хуков не
+    // вызывается (см. список в начале файла, пункт 2): у компонентов из-за
+    // этого watchOutside живёт на toggle, а не на $mount.
     view.on('$mount', function (state) {
         snapshot(state);
     });
@@ -547,6 +791,10 @@ $(function () {
     // Клик вне списка закрывает открытые. Слушатель на документе, потому что
     // списки разбросаны по странице; клик внутри списка пропускается,
     // иначе он закрыл бы тот список, в котором выбирают.
+    // Аудит wex 2026-11-26: этот слушатель не снимается: страница живёт до
+    // перезагрузки, поэтому вреда нет. Вместе с тремя компонентными
+    // (watchOutside) на документе висит по одному click на каждый открытый
+    // компонент — после обновления wex это первое, что стоит пересчитать.
     document.addEventListener('click', function (event) {
         var inSelect = event.target.closest('.select');
         var inComponent = event.target.closest('x-select, x-select-search, x-select-multi');

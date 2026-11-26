@@ -84,6 +84,33 @@
 
             <section class="block">
                 <h2 class="caption">
+                    Поток порций
+                    <span class="engine">engine/httpapi</span>
+                </h2>
+                <p class="note">
+                    Обычный маршрут возвращает значение целиком: движок кладёт
+                    его в конверт и только потом отправляет. Для ответа,
+                    который нельзя собрать заранее — поток порций, скачивание
+                    файла, обновления в одном соединении, — объявляется
+                    сырой маршрут: модуль получает ответ и пишет сам, а движок
+                    считает запрос и перехватывает панику. Нажмите кнопку:
+                    порции приходят по одной, страница обновляется по мере
+                    поступления.
+                </p>
+                <div class="line">
+                    <input class="input" type="number" min="1" max="20" w-bind="streamCount" placeholder="порций">
+                    <input class="input" type="number" min="0" max="5000" w-bind="streamMs" placeholder="пауза, мс">
+                    <button class="button" w-on="click:startStream">Начать поток</button>
+                </div>
+                <ul class="services" w-if="streamParts.length">
+                    <li class="service" w-for="part in streamParts traceby part.id">{{ part.text }}</li>
+                </ul>
+                <p class="note" w-if="streamDone">Поток закрыт.</p>
+                <p class="note" w-if="!streamParts.length && !streamDone">Порций ещё нет.</p>
+            </section>
+
+            <section class="block">
+                <h2 class="caption">
                     Службы
                     <span class="engine">engine/service</span>
                 </h2>
@@ -93,12 +120,37 @@
                     и дочерний процесс демо-модуля. Движок поднимает их по
                     списку, а при остановке гасит в обратном порядке: сначала
                     перестаёт принимать запросы, затем освобождает порты,
-                    закрывает файлы и завершает процессы.
+                    закрывает файлы и завершает процессы. Служба, которая
+                    сообщает о конце своей горутины, находится под надзором:
+                    паника не роняет процесс, отказ попадает в журнал, а
+                    служба перезапускается по правилу. Кнопка роняет службу
+                    <code>demo.watch</code> — через пару секунд видно, что
+                    процесс жив, а счётчик перезапусков вырос.
                 </p>
-                <ul class="services">
-                    <li class="service" w-for="name in services traceby name">{{ name }}</li>
-                </ul>
+                <table class="table" w-if="services.length">
+                    <thead>
+                        <tr>
+                            <th>Служба</th>
+                            <th>Работает</th>
+                            <th>Готова</th>
+                            <th>Перезапусков</th>
+                            <th>Последний отказ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr w-for="row in services traceby row.name">
+                            <td>{{ row.name }}</td>
+                            <td>{{ row.running }}</td>
+                            <td>{{ row.ready }}</td>
+                            <td>{{ row.restarts }}</td>
+                            <td class="text">{{ row.failure }}</td>
+                        </tr>
+                    </tbody>
+                </table>
                 <p class="note" w-if="!services.length">Служб нет.</p>
+                <div class="line">
+                    <button class="button" w-on="click:crashWatch">Уронить службу</button>
+                </div>
             </section>
 
             <section class="block">
@@ -114,10 +166,15 @@
                     перезапуск, повторяется после ошибки и видна снаружи по
                     статусу. Введите текст и нажмите «Поставить»: строка
                     появится в таблице, а работу разборщик возьмёт, когда
-                    приложение простаивает.
+                    приложение простаивает. Поле «не раньше» задаёт срок:
+                    такую работу не берут до указанного момента. Поле
+                    «медленно» удлиняет работу сверх предела попытки —
+                    разборщик перестаёт её ждать и ставит повтор.
                 </p>
                 <div class="line">
                     <input class="input" w-bind="text" placeholder="текст работы">
+                    <input class="input" type="number" min="0" w-bind="delaySeconds" placeholder="не раньше, с">
+                    <input class="input" type="number" min="0" w-bind="slowMs" placeholder="медленно, мс">
                     <button class="button" w-on="click:enqueue">Поставить</button>
                 </div>
                 <p class="label" w-if="jobs.length">Прокручиваемый список</p>
@@ -129,6 +186,7 @@
                                 <th>Вид</th>
                                 <th>Статус</th>
                                 <th>Попытка</th>
+                                <th>Не раньше</th>
                                 <th>Создана</th>
                                 <th>Начата</th>
                                 <th>Текст</th>
@@ -140,6 +198,7 @@
                                 <td>{{ row.kind }}</td>
                                 <td>{{ row.status }}</td>
                                 <td>{{ row.attempts }}</td>
+                                <td>{{ row.notBefore }}</td>
                                 <td>{{ row.createdAt }}</td>
                                 <td>{{ row.startedAt }}</td>
                                 <td class="text">{{ row.text }}</td>
@@ -220,6 +279,32 @@
                             w-disabled="!selects.deleteId.value">Удалить</button>
                 </div>
                 <p class="note" w-if="!events.length">Событий нет.</p>
+            </section>
+
+            <section class="block">
+                <h2 class="caption">
+                    Слот генерации
+                    <span class="engine">engine/gate</span>
+                </h2>
+                <p class="note">
+                    Модель отвечает по одному запросу, поэтому у неё одно
+                    разрешение — слот. Ход можно выполнить сейчас, прямо
+                    в обработчике запроса, или поставить работой в очередь;
+                    оба пути берут один и тот же слот, поэтому ходы не
+                    выполняются одновременно и ход не ждёт сам себя.
+                    Нажмите «Ход сейчас» дважды подряд: второй покажет,
+                    сколько ждал первого.
+                </p>
+                <div class="line">
+                    <input class="input" type="number" min="0" max="20000" w-bind="generateMs" placeholder="ход, мс">
+                    <button class="button" w-on="click:generateNow">Ход сейчас</button>
+                    <button class="button" w-on="click:generateQueued">Ход в очередь</button>
+                </div>
+                <p class="note" w-if="generateResult">{{ generateResult }}</p>
+                <p class="label">
+                    Разрешений {{ gate.capacity }}, занято {{ gate.active }},
+                    одновременно держали не больше {{ gate.peak }}
+                </p>
             </section>
 
             <section class="block">
@@ -319,6 +404,18 @@
         Компонент выпадающего списка. Разметка одна на все экземпляры,
         состояние у каждого своё; выбранное значение уходит родителю
         событием change.
+
+        Аудит wex, 2026-11-26. Это НЕ задание на переделку: код оставлен как
+        есть, перечисленное ниже — напоминание перепроверить при обновлении
+        wex (подробный список — в начале interface/app.js).
+
+        data-value — DOM-атрибут, поэтому значение пункта возвращается строкой,
+        даже если в items лежит число. Подсветка ниже сравнивает
+        value === item.value, так что числовые значения потеряют подсветку.
+        Сейчас значения строковые, поэтому не проявляется.
+
+        w-on="click:pick" опирается на то, что ядро подставляет найденный
+        элемент в event.currentTarget: из него pick берёт data-value.
     -->
     <template id="x-select">
         <div class="select widget simple" w-class="{ 'open': open }">
@@ -335,6 +432,13 @@
         </div>
     </template>
 
+    <!--
+        Список с поиском. Аудит wex 2026-11-26: пункты берутся из matches —
+        это кэш, который пересчитывается только при открытии и при вводе.
+        Если родитель подменит :items при открытом меню, список покажет
+        старые пункты до закрытия. Сейчас items статические; подробности
+        и варианты — в комментарии к x-select-search в app.js.
+    -->
     <template id="x-select-search">
         <div class="select widget searchable" w-class="{ 'open': open }">
             <div class="selected" w-on="click:toggle">
@@ -352,6 +456,12 @@
         </div>
     </template>
 
+    <!--
+        Множественный выбор. Аудит wex 2026-11-26: value.join и value.includes
+        требуют массива — если в :value придёт строка или null, выражения
+        шаблона будут падать на каждом рендере. Значение пункта приходит
+        строкой из data-value, как и в двух списках выше.
+    -->
     <template id="x-select-multi">
         <div class="select widget multiple" w-class="{ 'open': open }">
             <div class="selected" w-on="click:toggle">
