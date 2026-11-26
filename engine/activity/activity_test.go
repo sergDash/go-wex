@@ -57,3 +57,21 @@ func TestMeterNested(t *testing.T) {
 		t.Fatal("после второго запрос всё ещё активен")
 	}
 }
+
+// TestTouch — доменный сигнал сдвигает метку активности, не занимая счётчик:
+// так приложение говорит «человек действовал», не выдавая это за запрос.
+func TestTouch(t *testing.T) {
+	start := time.Unix(1000, 0)
+	c := clock.NewManual(start)
+	m := New(c)
+
+	c.Advance(30 * time.Second)
+	m.Touch()
+
+	if !m.LastActive().Equal(start.Add(30 * time.Second)) {
+		t.Fatalf("активность после сигнала: %s", m.LastActive())
+	}
+	if m.Busy() || m.Active() != 0 {
+		t.Fatalf("сигнал занял счётчик: active=%d busy=%v", m.Active(), m.Busy())
+	}
+}

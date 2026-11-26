@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fake — служба для проверки порядка запуска и остановки.
@@ -114,4 +117,220 @@ func TestPauseResume(t *testing.T) {
 	if strings.Join(log, ",") != strings.Join(want, ",") {
 		t.Fatalf("порядок: получили %v, ждали %v", log, want)
 	}
+}
+
+// failing — служба с каналом итога: первый запуск падает, следующие
+// работают до отмены. Так проверяется и граница паники, и перезапуск.
+type failing struct {
+	name string
+
+	mu     sync.Mutex
+	runs   int
+	done   chan error
+	cancel context.CancelFunc
+}
+
+func (f *failing) Name() string { return f.name }
+
+func (f *failing) Done() <-chan error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.done
+}
+
+func (f *failing) Start(ctx context.Context) error {
+	f.mu.Lock()
+	f.runs++
+	first := f.runs == 1
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	f.cancel = cancel
+	f.done = done
+	f.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		done <- Guard(func() error {
+			if first {
+				panic("сломано")
+			}
+			<-runCtx.Done()
+			return nil
+		})
+	}()
+	return nil
+}
+
+func (f *failing) Stop(ctx context.Context) error {
+	f.mu.Lock()
+	cancel, done := f.cancel, f.done
+	f.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestGuard — паника в горутине службы становится ошибкой со стеком.
+func TestGuard(t *testing.T) {
+	err := Guard(func() error { panic("сломано") })
+	if err == nil {
+		t.Fatal("паника не превратилась в ошибку")
+	}
+
+	var panicErr *PanicError
+	if !errors.As(err, &panicErr) {
+		t.Fatalf("тип ошибки: %T", err)
+	}
+	if len(panicErr.Stack) == 0 || panicErr.Value == nil {
+		t.Fatalf("паника без стека: %+v", panicErr)
+	}
+
+	if err := Guard(func() error { return nil }); err != nil {
+		t.Fatalf("обычная работа: %v", err)
+	}
+}
+
+// TestGroupRestarts — отказавшая служба перезапускается по правилу,
+// процесс продолжает работу, а счётчик перезапусков виден снаружи.
+func TestGroupRestarts(t *testing.T) {
+	svc := &failing{name: "model"}
+	g := New(svc)
+	g.SetRestart(0, 2)
+
+	j := &journalFake{}
+	g.SetJournal(j)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- g.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		st := g.States()[0]
+		if st.Restarts == 1 && st.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("служба не перезапустилась: %+v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(strings.Join(j.kinds, ","), "panic") || !strings.Contains(strings.Join(j.kinds, ","), "restart") {
+		t.Fatalf("журнал: %v", j.kinds)
+	}
+}
+
+// TestGroupReportsFailure — без правила перезапуска служба остаётся
+// отказавшей, причина видна снаружи, остальные службы работают.
+func TestGroupReportsFailure(t *testing.T) {
+	svc := &failing{name: "model"}
+	g := New(svc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- g.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		st := g.States()[0]
+		if !st.Running && st.Failure != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("отказ не отмечен: %+v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("Run завершился при отказе службы: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+// notReady — служба, которая сама решает, готова ли она.
+type notReady struct{ ready bool }
+
+func (s *notReady) Name() string                { return "slow" }
+func (s *notReady) Start(context.Context) error { return nil }
+func (s *notReady) Stop(context.Context) error  { return nil }
+func (s *notReady) Ready() bool                 { return s.ready }
+
+// TestGroupReady — готовность группы зависит от служб, которые умеют
+// отвечать на этот вопрос; отсутствие ответа считается готовностью, а
+// остановленная служба не готова никогда.
+func TestGroupReady(t *testing.T) {
+	slow := &notReady{}
+	g := New(&fake{name: "plain", log: &[]string{}}, slow)
+
+	if g.Ready() {
+		t.Fatal("до запуска группа уже готова")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- g.Run(ctx) }()
+
+	waitRunning(t, g, "slow")
+	if g.Ready() {
+		t.Fatal("неготовая служба не учтена")
+	}
+
+	slow.ready = true
+	if !g.Ready() {
+		t.Fatal("готовая служба считается неготовой")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+// waitRunning ждёт, пока служба отметится запущенной: группа стартует её
+// в своей горутине.
+func waitRunning(t *testing.T, g *Group, name string) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		for _, st := range g.States() {
+			if st.Name == name && st.Running {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("служба %s не запустилась", name)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// journalFake — журнал для проверки: запоминает источники и виды.
+type journalFake struct {
+	kinds []string
+}
+
+func (j *journalFake) Write(_, kind string, _ map[string]any) error {
+	j.kinds = append(j.kinds, kind)
+	return nil
 }
