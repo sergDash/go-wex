@@ -57,6 +57,30 @@ $(function () {
         return out;
     }
 
+    // word берёт текст из словаря по контексту и ключу. Если ключа нет,
+    // возвращается запасное значение: код статуса на экране лучше пустого
+    // места, а расхождение словарей видно по ответу словаря в поле missing.
+    function word(texts, context, key, fallback) {
+        var group = texts[context];
+
+        if (group && typeof group[key] === 'string' && group[key] !== '') {
+            return group[key];
+        }
+        return fallback;
+    }
+
+    // fill подставляет значения по местам {1}, {2} в самом тексте словаря.
+    // Склеивать «начало + число + хвост» нельзя: в другом языке порядок слов
+    // другой, и хвост оказался бы не там.
+    function fill(template, values) {
+        var out = String(template);
+
+        for (var i = 0; i < values.length; i++) {
+            out = out.replace('{' + (i + 1) + '}', values[i]);
+        }
+        return out;
+    }
+
     // filterItems отбирает пункты по строке без учёта регистра.
     function filterItems(items, query) {
         var needle = query.trim().toLowerCase();
@@ -113,7 +137,9 @@ $(function () {
         langError: '',
         checking: true,
         ok: false,
-        status: 'проверяем связь с сервером…',
+        // Статус связи приходит из словаря вместе с остальными текстами,
+        // поэтому литерала здесь нет: его ставит loadLang до отрисовки.
+        status: '',
         demo: {
             tcp: '',
             udp: '',
@@ -127,6 +153,7 @@ $(function () {
         gate: { capacity: 0, active: 0, peak: 0 },
         generateMs: 1500,
         generateResult: '',
+        logResult: '',
         streamCount: 5,
         streamMs: 300,
         streamParts: [],
@@ -134,10 +161,12 @@ $(function () {
         eventText: 'напоминание',
         eventSeconds: 10,
         selects: {
-            deleteMode: { open: false, value: 'event', label: 'только событие' },
-            deleteId: { open: false, value: '', label: '— событие —' },
+            // Подписи пустые: пока выбор не сделан, шаблон показывает текст
+            // из словаря, поэтому подпись не дублируется в двух местах.
+            deleteMode: { open: false, value: 'event', label: '' },
+            deleteId: { open: false, value: '', label: '' },
             color: { open: false, value: 'зелёный', label: 'зелёный' },
-            city: { open: false, value: '', label: '— город —', query: '' },
+            city: { open: false, value: '', label: '', query: '' },
             tags: { open: false, value: [] }
         },
         colors: colors,
@@ -157,6 +186,13 @@ $(function () {
     };
 
     var view = $('#app').state(state0);
+
+    // fill — фильтр для текста с подстановкой: {{ texts.gate.stats | fill:a:b }}.
+    // Значения приходят аргументами фильтра, а места подстановки стоят
+    // в самом переводе, поэтому порядок слов остаётся делом языка.
+    view.filter('fill', function (template) {
+        return fill(template, Array.prototype.slice.call(arguments, 1));
+    });
 
     // x-select — выпадающий список как компонент: разметка одна на все
     // экземпляры, состояние у каждого своё, выбранное значение уходит
@@ -178,7 +214,7 @@ $(function () {
     // шаблоне перестанет совпадать.
     var xSelect = $('#x-select')
         .state(function () {
-            return { items: [], value: '', open: false };
+            return { items: [], value: '', open: false, empty: '' };
         })
         .method('toggle', function (state) {
             watchOutside(this, state);
@@ -219,7 +255,10 @@ $(function () {
     // список, регистрировать глобально: Wex.directive('w-focus', ...).
     var xSelectSearch = $('#x-select-search')
         .state(function () {
-            return { items: [], matches: [], value: '', open: false, query: '' };
+            return {
+                items: [], matches: [], value: '', open: false, query: '',
+                empty: '', search: ''
+            };
         })
         .directive('w-focus', null, function ($el) {
             $el[0].focus();
@@ -264,7 +303,7 @@ $(function () {
     // приходит строкой из data-value.
     var xSelectMulti = $('#x-select-multi')
         .state(function () {
-            return { items: [], value: [], open: false };
+            return { items: [], value: [], open: false, empty: '' };
         })
         .method('toggle', function (state) {
             watchOutside(this, state);
@@ -336,6 +375,9 @@ $(function () {
             return call('/api/lang/' + encodeURIComponent(code)).then(function (bundle) {
                 state.texts = bundle.texts;
                 state.lang = bundle.lang;
+                // Стартовый статус — тоже текст из словаря: без него строка
+                // связи стояла бы на языке, которого больше нигде нет.
+                state.status = word(bundle.texts, 'common', 'checking', 'проверяем связь с сервером…');
                 document.documentElement.lang = bundle.lang;
             });
         });
@@ -375,27 +417,31 @@ $(function () {
     // с ответом; время показывается до секунд, а пустое место
     // в столбце «Начата» — прочерком. Срок постановки пустой, когда работа
     // доступна сразу, поэтому в столбце стоит слово, а не прочерк.
-    function rowState(row) {
+    //
+    // Статус на сервере — код (queued, running…), а не фраза: слово берётся
+    // из словаря, а неизвестный код показывается как есть, чтобы новая
+    // строка состояния не пропала из таблицы.
+    function rowState(row, texts, locale) {
         return {
             id: row.id,
             kind: row.kind,
-            status: row.status,
+            status: word(texts, 'jobs', 'status_' + row.status, row.status),
             text: row.text,
             attempts: row.attempts,
-            notBefore: momentText(row.notBefore, 'сразу'),
-            createdAt: momentText(row.createdAt, '—'),
-            startedAt: momentText(row.startedAt, '—')
+            notBefore: momentText(row.notBefore, word(texts, 'jobs', 'immediate', 'сразу'), locale),
+            createdAt: momentText(row.createdAt, word(texts, 'common', 'dash', '—'), locale),
+            startedAt: momentText(row.startedAt, word(texts, 'common', 'dash', '—'), locale)
         };
     }
 
     // momentText — момент для показа в местном времени. Сервер отдаёт
     // полную точность, панели хватает секунд, а год в таблице повторяется
     // в каждой строке и только отнимает ширину.
-    function momentText(value, empty) {
+    function momentText(value, empty, locale) {
         if (!value) {
             return empty;
         }
-        return new Date(value).toLocaleString('ru-RU', {
+        return new Date(value).toLocaleString(locale || 'ru-RU', {
             day: '2-digit',
             month: '2-digit',
             hour: '2-digit',
@@ -406,14 +452,16 @@ $(function () {
 
     // eventState приводит событие к полям стейта: период и срок показываются
     // готовыми строками, а источник называется словом.
-    function eventState(row) {
+    function eventState(row, texts, locale) {
         return {
             id: row.id,
             kind: row.kind,
             period: row.period,
-            next: momentText(row.next, '—'),
+            next: momentText(row.next, word(texts, 'common', 'dash', '—'), locale),
             declared: row.declared,
-            source: row.declared ? 'код' : 'данные'
+            source: row.declared ?
+                word(texts, 'events', 'source_code', 'код') :
+                word(texts, 'events', 'source_data', 'данные')
         };
     }
 
@@ -434,7 +482,9 @@ $(function () {
     // добавленных формой.
     function loadEvents(state) {
         return call('/api/events').then(function (rows) {
-            state.events = rows.map(eventState);
+            state.events = rows.map(function (row) {
+                return eventState(row, state.texts, state.lang);
+            });
             state.deletable = deletableRows(rows);
             state.failure = '';
         });
@@ -445,20 +495,25 @@ $(function () {
     function loadJobs(state) {
         return call('/api/demo/jobs')
             .then(function (rows) {
-                state.jobs = rows.map(rowState);
+                state.jobs = rows.map(function (row) {
+                    return rowState(row, state.texts, state.lang);
+                });
                 state.failure = '';
             });
     }
 
     // serviceState приводит состояние службы к полям таблицы: булевы
     // значения показываются словами, пустая причина отказа — прочерком.
-    function serviceState(row) {
+    function serviceState(row, texts) {
+        var yes = word(texts, 'service', 'yes', 'да');
+        var no = word(texts, 'service', 'no', 'нет');
+
         return {
             name: row.name,
-            running: row.running ? 'да' : 'нет',
-            ready: row.ready ? 'да' : 'нет',
+            running: row.running ? yes : no,
+            ready: row.ready ? yes : no,
             restarts: row.restarts,
-            failure: row.failure || '—'
+            failure: row.failure || word(texts, 'common', 'dash', '—')
         };
     }
 
@@ -467,7 +522,9 @@ $(function () {
     function loadServices(state) {
         return call('/api/services')
             .then(function (rows) {
-                state.services = rows.map(serviceState);
+                state.services = rows.map(function (row) {
+                    return serviceState(row, state.texts);
+                });
                 state.failure = '';
             });
     }
@@ -476,7 +533,7 @@ $(function () {
     // заходом: запросы идут параллельно, шаблон перерисовывается один раз.
     function snapshot(state) {
         state.checking = true;
-        state.status = 'проверяем связь с сервером…';
+        state.status = word(state.texts, 'common', 'checking', 'проверяем связь с сервером…');
 
         Promise.all([
             call('/api/health'),
@@ -497,16 +554,22 @@ $(function () {
                 state.status = health.status;
                 state.demo = demo;
                 state.gate = demo.gate;
-                state.jobs = rows.map(rowState);
-                state.services = services.map(serviceState);
-                state.events = events.map(eventState);
+                state.jobs = rows.map(function (row) {
+                    return rowState(row, state.texts, state.lang);
+                });
+                state.services = services.map(function (row) {
+                    return serviceState(row, state.texts);
+                });
+                state.events = events.map(function (row) {
+                    return eventState(row, state.texts, state.lang);
+                });
                 state.deletable = deletableRows(events);
                 state.failure = '';
             })
             .catch(function (error) {
                 state.checking = false;
                 state.ok = false;
-                state.status = 'сервер не ответил: ' + error.message;
+                state.status = fill(word(state.texts, 'common', 'check_failed', 'сервер не ответил: {1}'), [error.message]);
                 state.failure = error.message;
             });
     }
@@ -517,7 +580,7 @@ $(function () {
     view.method('check', function (state) {
         return function () {
             state.checking = true;
-            state.status = 'проверяем связь с сервером…';
+            state.status = word(state.texts, 'common', 'checking', 'проверяем связь с сервером…');
 
             call('/api/health')
                 .then(function (health) {
@@ -528,7 +591,7 @@ $(function () {
                 .catch(function (error) {
                     state.checking = false;
                     state.ok = false;
-                    state.status = 'сервер не ответил: ' + error.message;
+                    state.status = fill(word(state.texts, 'common', 'check_failed', 'сервер не ответил: {1}'), [error.message]);
                 });
         };
     });
@@ -575,7 +638,7 @@ $(function () {
             })
                 .then(function () {
                     state.selects.deleteId.value = '';
-                    state.selects.deleteId.label = '— событие —';
+                    state.selects.deleteId.label = '';
                     return loadEvents(state);
                 })
                 .catch(function (error) {
@@ -705,7 +768,10 @@ $(function () {
             })
                 .then(function (res) {
                     state.gate = res.gate;
-                    state.generateResult = 'ждал слот ' + res.waitedMs + ' мс, работал ' + res.tookMs + ' мс';
+                    state.generateResult = fill(
+                        word(state.texts, 'gate', 'result_sync', 'ждал слот {1} мс, работал {2} мс'),
+                        [res.waitedMs, res.tookMs]
+                    );
                 })
                 .catch(function (error) {
                     state.failure = describeError(error);
@@ -724,8 +790,29 @@ $(function () {
             })
                 .then(function (res) {
                     state.gate = res.gate;
-                    state.generateResult = 'ход ' + res.id + ' поставлен в очередь';
+                    state.generateResult = fill(
+                        word(state.texts, 'gate', 'result_queued', 'ход {1} поставлен в очередь'),
+                        [res.id]
+                    );
                     return loadJobs(state);
+                })
+                .catch(function (error) {
+                    state.failure = describeError(error);
+                });
+        };
+    });
+
+    // writeLog просит модуль записать фразу из словаря в журнал работы.
+    // Текст приходит от сервера: он собран там из того же файла, что и подписи
+    // страницы, поэтому совпадение записи в журнале с экраном видно сразу.
+    view.method('writeLog', function (state) {
+        return function () {
+            call('/api/log_ru/write', { method: 'POST' })
+                .then(function (res) {
+                    state.logResult = fill(
+                        word(state.texts, 'log_ru', 'result', 'записали: {1} — язык {2}'),
+                        [res.text, res.lang]
+                    );
                 })
                 .catch(function (error) {
                     state.failure = describeError(error);
@@ -776,9 +863,10 @@ $(function () {
                     state.streamDone = true;
                     return;
                 }
-                state.streamParts = state.streamParts.concat([
-                    { id: item.part, text: 'порция ' + item.part }
-                ]);
+                state.streamParts = state.streamParts.concat([{
+                    id: item.part,
+                    text: fill(word(state.texts, 'httpapi', 'stream_part', 'порция {1}'), [item.part])
+                }]);
             };
 
             source.onerror = function () {
@@ -789,7 +877,7 @@ $(function () {
                 }
                 source.close();
                 streamSource = null;
-                state.failure = 'поток прерван';
+                state.failure = word(state.texts, 'httpapi', 'stream_failed', 'поток прерван');
             };
         };
     });
@@ -851,7 +939,10 @@ $(function () {
     // не годится, его стирает успешный снимок данных.
     loadLang(state0)
         .catch(function (error) {
-            state0.langError = 'словарь не загружен: ' + error.message;
+            state0.langError = fill(
+                word(state0.texts, 'common', 'lang_failed', 'словарь не загружен: {1}'),
+                [error.message]
+            );
         })
         .then(function () {
             view.mount();

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -16,6 +18,7 @@ import (
 	"go-wex/engine/core"
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
+	"go-wex/engine/lang"
 	"go-wex/engine/process"
 	"go-wex/engine/schedule"
 )
@@ -215,23 +218,54 @@ func TestModuleSettings(t *testing.T) {
 	}
 }
 
+// testCatalog собирает словари во временном каталоге: модуль записи берёт
+// фразы оттуда, поэтому сборке нужен настоящий каталог, а не заглушка.
+func testCatalog(t *testing.T) *lang.Catalog {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ru-RU"), 0o755); err != nil {
+		t.Fatalf("каталог локали: %v", err)
+	}
+	body := `{"written": "строка", "title": "Заголовок"}`
+	if err := os.WriteFile(filepath.Join(dir, "ru-RU", "log_ru.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("словарь: %v", err)
+	}
+
+	catalog, err := lang.Open(dir, "ru-RU")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return catalog
+}
+
 // TestBuildModulesSettings — настройки доходят до модуля, а ошибка разбора
 // останавливает сборку с понятным текстом.
 func TestBuildModulesSettings(t *testing.T) {
-	modules, err := buildModules(deps{settings: map[string]json.RawMessage{
+	catalog := testCatalog(t)
+
+	modules, err := buildModules(deps{lang: catalog, settings: map[string]json.RawMessage{
 		"demo": json.RawMessage(`{"tickPeriod":"2s"}`),
 	}})
 	if err != nil {
 		t.Fatalf("buildModules: %v", err)
 	}
-	if len(modules) != 3 {
+	if len(modules) != 4 {
 		t.Fatalf("модулей: %d", len(modules))
 	}
 
-	_, err = buildModules(deps{settings: map[string]json.RawMessage{
+	_, err = buildModules(deps{lang: catalog, settings: map[string]json.RawMessage{
 		"demo": json.RawMessage(`{"period":"2s"}`),
 	}})
 	if err == nil || !strings.Contains(err.Error(), "demo") {
 		t.Fatalf("ошибка настроек: %v", err)
+	}
+}
+
+// TestBuildModulesNeedsCatalog — модуль записи требует словарь: без него
+// сборка останавливается с понятным текстом, а не пишет пустые строки.
+func TestBuildModulesNeedsCatalog(t *testing.T) {
+	if _, err := buildModules(deps{}); err == nil {
+		t.Fatal("сборка без словаря прошла")
 	}
 }

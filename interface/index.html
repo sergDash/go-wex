@@ -42,27 +42,19 @@
             -->
             <p class="failure" w-if="langError">{{ langError }}</p>
 
-            <section class="block" w-static>
+            <!-- Тексты секции лежат в lang/ru-RU/core.json: контекст — файл,
+                 ключ — адрес внутри него. Разметка в переводе пока не
+                 поддерживается, поэтому имена пакетов названы в тексте словами. -->
+            <section class="block">
                 <h2 class="caption">
-                    Модули и механизмы
+                    {{ texts.core.title }}
                     <span class="engine">engine/core</span>
                 </h2>
                 <p class="note">
-                    Движок — это набор механизмов и стандарт, по которому к нему
-                    подключаются модули. Механизм — часть движка: очередь,
-                    события, службы, часы, журнал, HTTP. Он не знает, кто им
-                    пользуется. Модуль — пакет, который подключается к ядру и
-                    объявляет, что умеет: маршруты, работы, события, службы,
-                    подкоманды. Поэтому <code>engine/jobs</code> — механизм,
-                    а <code>domains/demo</code> — модуль. Модуль можно выключить
-                    настройкой, механизм — нет: он и есть движок.
+                    {{ texts.core.note_intro }}
                 </p>
                 <p class="note">
-                    Слово «механизм» выбрано, чтобы не говорить «ядровый
-                    модуль»: иначе к каждому модулю нужно уточнение, ядровый
-                    он или внешний. Подписи <code>engine/…</code> в заголовках
-                    называют механизм, а разделы показывают, что на нём
-                    собрано.
+                    {{ texts.core.note_word }}
                 </p>
             </section>
 
@@ -92,57 +84,40 @@
 
             <section class="block">
                 <h2 class="caption">
-                    Поток порций
+                    {{ texts.httpapi.stream_title }}
                     <span class="engine">engine/httpapi</span>
                 </h2>
                 <p class="note">
-                    Обычный маршрут возвращает значение целиком: движок кладёт
-                    его в конверт и только потом отправляет. Для ответа,
-                    который нельзя собрать заранее — поток порций, скачивание
-                    файла, обновления в одном соединении, — объявляется
-                    сырой маршрут: модуль получает ответ и пишет сам, а движок
-                    считает запрос и перехватывает панику. Нажмите кнопку:
-                    порции приходят по одной, страница обновляется по мере
-                    поступления.
+                    {{ texts.httpapi.stream_note }}
                 </p>
                 <div class="line">
-                    <input class="input" type="number" min="1" max="20" w-bind="streamCount" placeholder="порций">
-                    <input class="input" type="number" min="0" max="5000" w-bind="streamMs" placeholder="пауза, мс">
-                    <button class="button" w-on="click:startStream">Начать поток</button>
+                    <input class="input" type="number" min="1" max="20" w-bind="streamCount" placeholder="{{ texts.httpapi.stream_count }}">
+                    <input class="input" type="number" min="0" max="5000" w-bind="streamMs" placeholder="{{ texts.httpapi.stream_pause }}">
+                    <button class="button" w-on="click:startStream">{{ texts.httpapi.stream_start }}</button>
                 </div>
                 <ul class="services" w-if="streamParts.length">
                     <li class="service" w-for="part in streamParts traceby part.id">{{ part.text }}</li>
                 </ul>
-                <p class="note" w-if="streamDone">Поток закрыт.</p>
-                <p class="note" w-if="!streamParts.length && !streamDone">Порций ещё нет.</p>
+                <p class="note" w-if="streamDone">{{ texts.httpapi.stream_closed }}</p>
+                <p class="note" w-if="!streamParts.length && !streamDone">{{ texts.httpapi.stream_empty }}</p>
             </section>
 
             <section class="block">
                 <h2 class="caption">
-                    Службы
+                    {{ texts.service.title }}
                     <span class="engine">engine/service</span>
                 </h2>
                 <p class="note">
-                    Служба — часть приложения, которая живёт всё время работы:
-                    HTTP-сервер, разборщик очереди, события, журнал, слушатели
-                    и дочерний процесс демо-модуля. Движок поднимает их по
-                    списку, а при остановке гасит в обратном порядке: сначала
-                    перестаёт принимать запросы, затем освобождает порты,
-                    закрывает файлы и завершает процессы. Служба, которая
-                    сообщает о конце своей горутины, находится под надзором:
-                    паника не роняет процесс, отказ попадает в журнал, а
-                    служба перезапускается по правилу. Кнопка роняет службу
-                    <code>demo.watch</code> — через пару секунд видно, что
-                    процесс жив, а счётчик перезапусков вырос.
+                    {{ texts.service.note }}
                 </p>
                 <table class="table" w-if="services.length">
                     <thead>
                         <tr>
-                            <th>Служба</th>
-                            <th>Работает</th>
-                            <th>Готова</th>
-                            <th>Перезапусков</th>
-                            <th>Последний отказ</th>
+                            <th>{{ texts.service.col_name }}</th>
+                            <th>{{ texts.service.col_running }}</th>
+                            <th>{{ texts.service.col_ready }}</th>
+                            <th>{{ texts.service.col_restarts }}</th>
+                            <th>{{ texts.service.col_failure }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -155,49 +130,39 @@
                         </tr>
                     </tbody>
                 </table>
-                <p class="note" w-if="!services.length">Служб нет.</p>
+                <p class="note" w-if="!services.length">{{ texts.service.empty }}</p>
                 <div class="line">
-                    <button class="button" w-on="click:crashWatch">Уронить службу</button>
+                    <button class="button" w-on="click:crashWatch">{{ texts.service.crash }}</button>
                 </div>
             </section>
 
             <section class="block">
                 <h2 class="caption">
-                    Работа в очереди
+                    {{ texts.jobs.title }}
                     <span class="engine">engine/jobs</span>
                 </h2>
                 <p class="note">
-                    Долгую работу не делают внутри ответа: клиент ждал бы,
-                    а соединение могло оборваться. Запрос только ставит
-                    работу в очередь и сразу получает номер, а выполняет её
-                    разборщик — отдельная служба. Работа переживает
-                    перезапуск, повторяется после ошибки и видна снаружи по
-                    статусу. Введите текст и нажмите «Поставить»: строка
-                    появится в таблице, а работу разборщик возьмёт, когда
-                    приложение простаивает. Поле «не раньше» задаёт срок:
-                    такую работу не берут до указанного момента. Поле
-                    «медленно» удлиняет работу сверх предела попытки —
-                    разборщик перестаёт её ждать и ставит повтор.
+                    {{ texts.jobs.note }}
                 </p>
                 <div class="line">
-                    <input class="input" w-bind="text" placeholder="текст работы">
-                    <input class="input" type="number" min="0" w-bind="delaySeconds" placeholder="не раньше, с">
-                    <input class="input" type="number" min="0" w-bind="slowMs" placeholder="медленно, мс">
-                    <button class="button" w-on="click:enqueue">Поставить</button>
+                    <input class="input" w-bind="text" placeholder="{{ texts.jobs.field_text }}">
+                    <input class="input" type="number" min="0" w-bind="delaySeconds" placeholder="{{ texts.jobs.field_delay }}">
+                    <input class="input" type="number" min="0" w-bind="slowMs" placeholder="{{ texts.jobs.field_slow }}">
+                    <button class="button" w-on="click:enqueue">{{ texts.jobs.enqueue }}</button>
                 </div>
-                <p class="label" w-if="jobs.length">Прокручиваемый список</p>
+                <p class="label" w-if="jobs.length">{{ texts.jobs.list_label }}</p>
                 <div class="scroll" w-if="jobs.length" w-stick>
                     <table class="table">
                         <thead>
                             <tr>
-                                <th>№</th>
-                                <th>Вид</th>
-                                <th>Статус</th>
-                                <th>Попытка</th>
-                                <th>Не раньше</th>
-                                <th>Создана</th>
-                                <th>Начата</th>
-                                <th>Текст</th>
+                                <th>{{ texts.jobs.col_id }}</th>
+                                <th>{{ texts.jobs.col_kind }}</th>
+                                <th>{{ texts.jobs.col_status }}</th>
+                                <th>{{ texts.jobs.col_attempts }}</th>
+                                <th>{{ texts.jobs.col_not_before }}</th>
+                                <th>{{ texts.jobs.col_created }}</th>
+                                <th>{{ texts.jobs.col_started }}</th>
+                                <th>{{ texts.jobs.col_text }}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -214,38 +179,32 @@
                         </tbody>
                     </table>
                 </div>
-                <p class="note" w-if="!jobs.length">Очередь пуста.</p>
-                <button class="button" w-on="click:refreshQueue">Обновить очередь</button>
+                <p class="note" w-if="!jobs.length">{{ texts.jobs.empty }}</p>
+                <button class="button" w-on="click:refreshQueue">{{ texts.jobs.refresh }}</button>
             </section>
 
             <section class="block">
                 <h2 class="caption">
-                    Отложенные события
+                    {{ texts.events.title }}
                     <span class="engine">engine/events</span>
                 </h2>
                 <p class="note">
-                    Иногда работу ставит не человек, а время: напоминание,
-                    отчёт, уборка. Событие — это срок, по которому движок сам
-                    ставит работу. Одно событие объявлено кодом
-                    (<code>demo.tick</code> раз в десять секунд), остальные
-                    можно добавить формой: текст работы и период в секундах.
-                    Срок лежит в хранилище, поэтому событие переживает
-                    перезапуск, а пропущенные сроки дают одно срабатывание.
+                    {{ texts.events.note }}
                 </p>
                 <div class="line">
-                    <input class="input" w-bind="eventText" placeholder="текст работы">
+                    <input class="input" w-bind="eventText" placeholder="{{ texts.events.field_text }}">
                     <input class="input period" w-bind="eventSeconds" type="number" min="1" max="3600">
-                    <button class="button" w-on="click:addEvent">Добавить событие</button>
+                    <button class="button" w-on="click:addEvent">{{ texts.events.add }}</button>
                 </div>
-                <p class="label" w-if="events.length">События</p>
+                <p class="label" w-if="events.length">{{ texts.events.list_label }}</p>
                 <table class="table" w-if="events.length">
                     <thead>
                         <tr>
-                            <th>Событие</th>
-                            <th>Вид</th>
-                            <th>Период</th>
-                            <th>Сработает</th>
-                            <th>Источник</th>
+                            <th>{{ texts.events.col_id }}</th>
+                            <th>{{ texts.events.col_kind }}</th>
+                            <th>{{ texts.events.col_period }}</th>
+                            <th>{{ texts.events.col_next }}</th>
+                            <th>{{ texts.events.col_source }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -259,22 +218,22 @@
                     </tbody>
                 </table>
                 <div class="deletebar" w-if="deletable.length">
-                    <span class="hint">Удалить:</span>
+                    <span class="hint">{{ texts.events.delete_hint }}</span>
                     <div class="select mode simple" w-class="{ 'open': selects.deleteMode.open }">
                         <div class="selected" data-select="deleteMode" w-on="click:toggleSelect">
-                            <span class="value">{{ selects.deleteMode.label }}</span>
+                            <span class="value">{{ selects.deleteMode.label || texts.events.mode_event }}</span>
                             <span class="caret">▾</span>
                         </div>
                         <div class="options" w-if="selects.deleteMode.open">
                             <div class="option" data-select="deleteMode" data-value="event"
-                                 w-on="click:pickSelect">только событие</div>
+                                 w-on="click:pickSelect">{{ texts.events.mode_event }}</div>
                             <div class="option" data-select="deleteMode" data-value="event-and-jobs"
-                                 w-on="click:pickSelect">вместе с работами (пока не сделано)</div>
+                                 w-on="click:pickSelect">{{ texts.events.mode_event_jobs }}</div>
                         </div>
                     </div>
                     <div class="select pick simple" w-class="{ 'open': selects.deleteId.open }">
                         <div class="selected" data-select="deleteId" w-on="click:toggleSelect">
-                            <span class="value">{{ selects.deleteId.label }}</span>
+                            <span class="value">{{ selects.deleteId.label || texts.events.choose }}</span>
                             <span class="caret">▾</span>
                         </div>
                         <div class="options" w-if="selects.deleteId.open">
@@ -284,54 +243,61 @@
                         </div>
                     </div>
                     <button class="button" w-on="click:deleteEvent"
-                            w-disabled="!selects.deleteId.value">Удалить</button>
+                            w-disabled="!selects.deleteId.value">{{ texts.events.delete }}</button>
                 </div>
-                <p class="note" w-if="!events.length">Событий нет.</p>
+                <p class="note" w-if="!events.length">{{ texts.events.empty }}</p>
             </section>
 
             <section class="block">
                 <h2 class="caption">
-                    Слот генерации
+                    {{ texts.gate.title }}
                     <span class="engine">engine/gate</span>
                 </h2>
                 <p class="note">
-                    Модель отвечает по одному запросу, поэтому у неё одно
-                    разрешение — слот. Ход можно выполнить сейчас, прямо
-                    в обработчике запроса, или поставить работой в очередь;
-                    оба пути берут один и тот же слот, поэтому ходы не
-                    выполняются одновременно и ход не ждёт сам себя.
-                    Нажмите «Ход сейчас» дважды подряд: второй покажет,
-                    сколько ждал первого.
+                    {{ texts.gate.note }}
                 </p>
                 <div class="line">
-                    <input class="input" type="number" min="0" max="20000" w-bind="generateMs" placeholder="ход, мс">
-                    <button class="button" w-on="click:generateNow">Ход сейчас</button>
-                    <button class="button" w-on="click:generateQueued">Ход в очередь</button>
+                    <input class="input" type="number" min="0" max="20000" w-bind="generateMs" placeholder="{{ texts.gate.field_ms }}">
+                    <button class="button" w-on="click:generateNow">{{ texts.gate.now }}</button>
+                    <button class="button" w-on="click:generateQueued">{{ texts.gate.queued }}</button>
                 </div>
                 <p class="note" w-if="generateResult">{{ generateResult }}</p>
                 <p class="label">
-                    Разрешений {{ gate.capacity }}, занято {{ gate.active }},
-                    одновременно держали не больше {{ gate.peak }}
+                    {{ texts.gate.stats | fill:gate.capacity:gate.active:gate.peak }}
                 </p>
+            </section>
+
+            <!-- Модуль-пример: словарь берёт серверный код, а не страница.
+                 Подпись — domains/log_ru, потому что это модуль, а не механизм. -->
+            <section class="block">
+                <h2 class="caption">
+                    {{ texts.log_ru.title }}
+                    <span class="engine">domains/log_ru</span>
+                </h2>
+                <p class="note">
+                    {{ texts.log_ru.note }}
+                </p>
+                <div class="line">
+                    <button class="button" w-on="click:writeLog">{{ texts.log_ru.button }}</button>
+                </div>
+                <p class="note" w-if="logResult">{{ logResult }}</p>
+                <p class="note" w-if="!logResult">{{ texts.log_ru.empty }}</p>
             </section>
 
             <section class="block">
                 <h2 class="caption">
-                    Селекторы
+                    {{ texts.interface.title }}
                     <span class="engine">interface</span>
                 </h2>
                 <p class="note">
-                    Выпадающие списки сделаны из своих элементов, а не из
-                    браузерного <code>select</code>: так они выглядят одинаково
-                    и управляются тем же стейтом, что и остальная страница.
-                    Данные лежат локально — выбор никуда не отправляется.
+                    {{ texts.interface.note }}
                 </p>
 
                 <div class="columns">
                     <div class="column">
-                        <p class="label">Обычные</p>
+                        <p class="label">{{ texts.interface.group_plain }}</p>
 
-                        <p class="label">Простой</p>
+                        <p class="label">{{ texts.interface.simple }}</p>
                         <div class="select simple" w-class="{ 'open': selects.color.open }">
                             <div class="selected" data-select="color" w-on="click:toggleSelect">
                                 <span class="value">{{ selects.color.label }}</span>
@@ -344,16 +310,16 @@
                             </div>
                         </div>
 
-                        <p class="label">С поиском</p>
+                        <p class="label">{{ texts.interface.searchable }}</p>
                         <div class="select searchable" w-class="{ 'open': selects.city.open }">
                             <div class="selected" data-select="city" w-on="click:toggleSelect">
-                                <span class="value">{{ selects.city.label }}</span>
+                                <span class="value">{{ selects.city.label || texts.interface.choose_city }}</span>
                                 <span class="caret">▾</span>
                             </div>
                             <div class="options" w-if="selects.city.open">
                                 <div class="search">
                                     <input class="input" w-bind="selects.city.query"
-                                           w-on="input:filterCities" w-focus placeholder="поиск">
+                                           w-on="input:filterCities" w-focus placeholder="{{ texts.common.search }}">
                                 </div>
                                 <div class="option" w-for="item in cityMatches traceby item"
                                      data-select="city" data-value="{{ item }}"
@@ -361,10 +327,10 @@
                             </div>
                         </div>
 
-                        <p class="label">Множественный</p>
+                        <p class="label">{{ texts.interface.multiple }}</p>
                         <div class="select multiple" w-class="{ 'open': selects.tags.open }">
                             <div class="selected" data-select="tags" w-on="click:toggleSelect">
-                                <span class="value">{{ selects.tags.value.join(', ') || '— не выбрано —' }}</span>
+                                <span class="value">{{ selects.tags.value.join(', ') || texts.common.empty_choice }}</span>
                                 <span class="caret">▾</span>
                             </div>
                             <div class="options" w-if="selects.tags.open">
@@ -377,18 +343,22 @@
                     </div>
 
                     <div class="column">
-                        <p class="label">На компонентах</p>
+                        <p class="label">{{ texts.interface.group_components }}</p>
 
-                        <p class="label">Простой</p>
+                        <p class="label">{{ texts.interface.simple }}</p>
                         <x-select :items="colorItems" :value="componentColor"
+                                  :empty="texts.common.empty_choice"
                                   @change="onComponentColor"></x-select>
 
-                        <p class="label">С поиском</p>
+                        <p class="label">{{ texts.interface.searchable }}</p>
                         <x-select-search :items="cityItems" :value="componentCity"
+                                         :empty="texts.common.empty_choice"
+                                         :search="texts.common.search"
                                          @change="onComponentCity"></x-select-search>
 
-                        <p class="label">Множественный</p>
+                        <p class="label">{{ texts.interface.multiple }}</p>
                         <x-select-multi :items="tagItems" :value="componentTags"
+                                        :empty="texts.common.empty_choice"
                                         @change="onComponentTags"></x-select-multi>
                     </div>
                 </div>
@@ -396,13 +366,10 @@
 
             <footer class="actions">
                 <button class="button" w-on="click:refresh" w-disabled="checking">
-                    Обновить всё
+                    {{ texts.common.refresh_all }}
                 </button>
                 <span class="hint">
-                    Перечитывает все разделы сразу: связь, службы, очередь
-                    и событие. Опроса нет — данные меняются только после
-                    нажатия; канал обновлений без опроса — сценарий SC-16,
-                    он ещё не сделан.
+                    {{ texts.common.refresh_hint }}
                 </span>
             </footer>
         </main>
@@ -428,7 +395,7 @@
     <template id="x-select">
         <div class="select widget simple" w-class="{ 'open': open }">
             <div class="selected" w-on="click:toggle">
-                <span class="value">{{ value || '— не выбрано —' }}</span>
+                <span class="value">{{ value || empty }}</span>
                 <span class="caret">▾</span>
             </div>
             <div class="options" w-if="open">
@@ -450,13 +417,13 @@
     <template id="x-select-search">
         <div class="select widget searchable" w-class="{ 'open': open }">
             <div class="selected" w-on="click:toggle">
-                <span class="value">{{ value || '— не выбрано —' }}</span>
+                <span class="value">{{ value || empty }}</span>
                 <span class="caret">▾</span>
             </div>
             <div class="options" w-if="open">
                 <div class="search">
                     <input class="input" w-bind="query" w-on="input:filter"
-                           w-focus placeholder="поиск">
+                           w-focus placeholder="{{ search }}">
                 </div>
                 <div class="option" w-for="item in matches traceby item.value"
                      data-value="{{ item.value }}" w-on="click:pick">{{ item.label }}</div>
@@ -473,7 +440,7 @@
     <template id="x-select-multi">
         <div class="select widget multiple" w-class="{ 'open': open }">
             <div class="selected" w-on="click:toggle">
-                <span class="value">{{ value.join(', ') || '— не выбрано —' }}</span>
+                <span class="value">{{ value.join(', ') || empty }}</span>
                 <span class="caret">▾</span>
             </div>
             <div class="options" w-if="open">

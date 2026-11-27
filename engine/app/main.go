@@ -23,6 +23,7 @@ import (
 
 	"go-wex/domains/demo"
 	"go-wex/domains/health"
+	logru "go-wex/domains/log_ru"
 	"go-wex/domains/tasks"
 	"go-wex/engine/activity"
 	"go-wex/engine/clock"
@@ -99,6 +100,12 @@ func runCommand(cfg config.HTTPAPI, args []string) int {
 	disp.SetJournal(jw)
 	disp.SetKeep(cfg.Jobs.Keep)
 
+	catalog, err := openCatalog(cfg)
+	if err != nil {
+		log.Printf("словари: %v", err)
+		return 1
+	}
+
 	commands := process.NewRegistry()
 	evReg := events.NewRegistry()
 
@@ -107,6 +114,7 @@ func runCommand(cfg config.HTTPAPI, args []string) int {
 	modules, err := buildModules(deps{
 		disp:     disp,
 		journal:  jw,
+		lang:     catalog,
 		states:   func() []service.State { return nil },
 		events:   nil,
 		slot:     gate.New(1),
@@ -201,18 +209,13 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		return 1
 	}
 
-	// Словари переводов открываются до регистрации: сломанный файл и
-	// отсутствующая базовая локаль должны остановить запуск, а не всплыть
-	// пустой страницей. Путь берётся относительно каталога запуска, как
-	// у хранилища и журнала.
-	var catalog *lang.Catalog
-	if cfg.Lang != nil {
-		catalog, err = lang.Open(cfg.Lang.Dir, cfg.Lang.Base)
-		if err != nil {
-			log.Printf("словари: %v", err)
-			return 1
-		}
-		log.Printf("словари: %s, базовый язык %s", cfg.Lang.Dir, catalog.Base())
+	// Словари открываются до регистрации: сломанный файл и отсутствующая
+	// базовая локаль должны остановить запуск, а не всплыть пустой страницей.
+	// Путь берётся относительно каталога запуска, как у хранилища и журнала.
+	catalog, err := openCatalog(cfg)
+	if err != nil {
+		log.Printf("словари: %v", err)
+		return 1
 	}
 
 	// Виды работ и очередь общие для модулей: модуль объявляет вид, а ставит
@@ -292,6 +295,7 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 	modules, err := buildModules(deps{
 		disp:     disp,
 		journal:  jw,
+		lang:     catalog,
 		states:   states,
 		events:   evSched,
 		slot:     slot,
@@ -395,6 +399,22 @@ func browserCommand() string {
 	return "xdg-open"
 }
 
+// openCatalog открывает словари, если в настройках есть раздел lang.
+// Каталог читают обе стороны: маршруты отдают тексты странице, модули берут
+// из него фразы для ответов и записей. Отсутствие раздела означает, что
+// переводов нет вовсе.
+func openCatalog(cfg config.HTTPAPI) (*lang.Catalog, error) {
+	if cfg.Lang == nil {
+		return nil, nil
+	}
+	catalog, err := lang.Open(cfg.Lang.Dir, cfg.Lang.Base)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("словари: %s, базовый язык %s", cfg.Lang.Dir, catalog.Base())
+	return catalog, nil
+}
+
 func selectModules(all []core.Module, disabled []string, settings map[string]json.RawMessage) ([]core.Module, error) {
 	known := make(map[string]bool, len(all))
 	for _, m := range all {
@@ -441,6 +461,7 @@ func moduleNames(modules []core.Module) []string {
 type deps struct {
 	disp     *jobs.Dispatcher
 	journal  journal.Writer
+	lang     *lang.Catalog
 	states   func() []service.State
 	events   *events.Scheduler
 	slot     *gate.Gate
@@ -467,8 +488,12 @@ func buildModules(d deps) ([]core.Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	logModule, err := logru.New(d.lang, d.journal, section("log_ru"))
+	if err != nil {
+		return nil, err
+	}
 
-	return []core.Module{healthModule, tasksModule, demoModule}, nil
+	return []core.Module{healthModule, tasksModule, demoModule, logModule}, nil
 }
 
 // resolveDir выбирает каталог интерфейса.
