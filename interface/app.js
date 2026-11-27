@@ -358,6 +358,36 @@ $(function () {
         };
     });
 
+    // checkTexts ищет в шаблоне обращения вида texts.<контекст>.<ключ> и
+    // называет те, которых нет в словаре. Проверка нужна потому, что
+    // пропавший текст не виден взглядом: w-html заменяет содержимое элемента
+    // целиком, заглушку внутрь не поставить, а {{ }} на пустом значении даёт
+    // пустое место. Список попадает в строку отказа, поэтому опечатка в ключе
+    // или забытый контекст видны при открытии страницы.
+    function checkTexts(template, texts) {
+        var found = template.match(/texts\.[a-z0-9_]+\.[a-z0-9_]+/g) || [];
+        var seen = {};
+        var missing = [];
+
+        for (var i = 0; i < found.length; i++) {
+            var path = found[i];
+            if (seen[path]) {
+                continue;
+            }
+            seen[path] = true;
+
+            var parts = path.split('.');
+            var group = texts[parts[1]];
+            var value = group ? group[parts[2]] : '';
+            if (!value) {
+                // В сообщении — путь без префикса: «jobs.empty» короче
+                // и читается как адрес в словаре, а не как выражение.
+                missing.push(parts[1] + '.' + parts[2]);
+            }
+        }
+        return missing;
+    }
+
     // loadLang читает словарь до первой отрисовки. Язык берётся из адреса
     // (?lang=en-GB), иначе — базовый из каталога. Сервер сам сводит незнакомый
     // язык к знакомому и называет в ответе фактический, поэтому <html lang>
@@ -945,6 +975,13 @@ $(function () {
             );
         })
         .then(function () {
+            // Проверка шаблона идёт после словаря и до отрисовки: успеть
+            // назвать пропуски раньше, чем человек увидит пустые места.
+            var template = document.getElementById('app').innerHTML;
+            var missing = checkTexts(template, state0.texts);
+            if (missing.length && !state0.langError) {
+                state0.langError = 'нет текстов: ' + missing.join(', ');
+            }
             view.mount();
         });
 });

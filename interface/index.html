@@ -45,17 +45,21 @@
             <!-- Тексты секции лежат в lang/ru-RU/core.json: контекст — файл,
                  ключ — адрес внутри него. Разметка в переводе пока не
                  поддерживается, поэтому имена пакетов названы в тексте словами. -->
+            <!--
+                Тексты с разметкой выводятся через w-html, а не через {{ }}:
+                подстановка пишет только текст, поэтому <code> в словаре
+                иначе показался бы тегами. Элемент обязан быть пустым —
+                w-html заменяет содержимое целиком, и заглушка внутри
+                исчезает вместе с ним. Правила разметки и санитайзера —
+                в lang/AGENTS.md; пропавшие ключи ловит проверка при загрузке.
+            -->
             <section class="block">
                 <h2 class="caption">
                     {{ texts.core.title }}
                     <span class="engine">engine/core</span>
                 </h2>
-                <p class="note">
-                    {{ texts.core.note_intro }}
-                </p>
-                <p class="note">
-                    {{ texts.core.note_word }}
-                </p>
+                <p class="note" w-html="texts.core.note_intro"></p>
+                <p class="note" w-html="texts.core.note_word"></p>
             </section>
 
             <!--
@@ -71,9 +75,7 @@
                     {{ texts.httpapi.connect_title }}
                     <span class="engine">engine/httpapi</span>
                 </h2>
-                <p class="note">
-                    {{ texts.httpapi.connect_note }}
-                </p>
+                <p class="note" w-html="texts.httpapi.connect_note"></p>
                 <div class="probe">
                     <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
                         <span class="dot"></span>{{ status }}
@@ -107,9 +109,7 @@
                     {{ texts.service.title }}
                     <span class="engine">engine/service</span>
                 </h2>
-                <p class="note">
-                    {{ texts.service.note }}
-                </p>
+                <p class="note" w-html="texts.service.note"></p>
                 <table class="table" w-if="services.length">
                     <thead>
                         <tr>
@@ -188,9 +188,7 @@
                     {{ texts.events.title }}
                     <span class="engine">engine/events</span>
                 </h2>
-                <p class="note">
-                    {{ texts.events.note }}
-                </p>
+                <p class="note" w-html="texts.events.note"></p>
                 <div class="line">
                     <input class="input" w-bind="eventText" placeholder="{{ texts.events.field_text }}">
                     <input class="input period" w-bind="eventSeconds" type="number" min="1" max="3600">
@@ -289,9 +287,7 @@
                     {{ texts.interface.title }}
                     <span class="engine">interface</span>
                 </h2>
-                <p class="note">
-                    {{ texts.interface.note }}
-                </p>
+                <p class="note" w-html="texts.interface.note"></p>
 
                 <div class="columns">
                     <div class="column">
