@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"go-wex/engine/core"
 )
@@ -116,6 +117,37 @@ func TestActivityIgnoresStatic(t *testing.T) {
 	s.Handler().ServeHTTP(apiRec, httptest.NewRequest(http.MethodGet, "/api/check", nil))
 	if a.begins != 1 || a.ends != 1 {
 		t.Fatalf("маршрут модуля: начал=%d завершил=%d", a.begins, a.ends)
+	}
+}
+
+// TestStaticRevalidate — статика помечается no-cache и сверяется с сервером:
+// правка файла видна на открытой странице без сброса кэша браузера.
+func TestStaticRevalidate(t *testing.T) {
+	modTime := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	assets := fstest.MapFS{
+		"app.js": &fstest.MapFile{Data: []byte("панель"), ModTime: modTime},
+	}
+	s := New("127.0.0.1:0", assets)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статика: код %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("Cache-Control: %q", got)
+	}
+	// Эту же метку клиент присылает обратно при сверке.
+	if got := rec.Header().Get("Last-Modified"); got == "" {
+		t.Fatalf("нет Last-Modified: сверять нечего")
+	}
+
+	recheck := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	recheck.Header.Set("If-Modified-Since", modTime.UTC().Format(http.TimeFormat))
+	recheckRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(recheckRec, recheck)
+	if recheckRec.Code != http.StatusNotModified {
+		t.Fatalf("сверка: код %d", recheckRec.Code)
 	}
 }
 

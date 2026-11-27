@@ -66,8 +66,21 @@ func New(addr string, assets fs.FS) *Server {
 	}
 
 	// Статика — самый общий образец пути; точные пути модулей выигрывают у него.
-	s.mux.Handle("GET /", http.FileServer(http.FS(assets)))
+	s.mux.Handle("GET /", revalidate(http.FileServer(http.FS(assets))))
 	return s
+}
+
+// revalidate просит браузер сверять каждый файл с сервером. Без заголовка
+// браузер применяет эвристическую свежесть (доля от возраста файла) и берёт
+// статику из кэша, не спрашивая сервер: правка interface/app.js не доезжает
+// до открытой страницы. Выбран no-cache, а не no-store: файл кэшируется,
+// а сверка опирается на Last-Modified от FileServer и стоит одного запроса
+// с ответом 304, если файл не менялся.
+func revalidate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Name — имя службы для группы.
