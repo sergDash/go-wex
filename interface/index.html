@@ -23,20 +23,24 @@
     <template id="app">
         <main class="panel">
             <!--
-                Шапка не зависит от стейта, поэтому помечена w-static:
-                перерисовки её не касаются.
+                Шапка берёт тексты из словаря: они приходят данными вместе
+                с остальным стейтом, поэтому блок больше не помечен w-static —
+                при смене языка его нужно перерисовать.
             -->
-            <header class="head" w-static>
-                <h1 class="title">Движок go + wex: панель демо</h1>
+            <header class="head">
+                <h1 class="title">{{ texts.common.title }}</h1>
                 <p class="lead">
-                    Каждая секция показывает один механизм движка: рядом
-                    с заголовком — имя пакета, который за него отвечает.
-                    Пояснение говорит, зачем механизм придуман и что нажать,
-                    чтобы увидеть его в работе.
+                    {{ texts.common.lead }}
                 </p>
             </header>
 
             <p class="failure" w-if="failure">{{ failure }}</p>
+            <!--
+                Отказ словаря показывается отдельно: снимок данных стирает
+                общий failure, а страница без подписей должна объяснить, что
+                случилось.
+            -->
+            <p class="failure" w-if="langError">{{ langError }}</p>
 
             <section class="block" w-static>
                 <h2 class="caption">
@@ -62,23 +66,27 @@
                 </p>
             </section>
 
+            <!--
+                Тексты секции лежат в lang/ru-RU/httpapi.json: ключ — адрес
+                внутри контекста, и файл называется по разделу, а не по пакету.
+                Разметка внутри перевода (например, <code> вокруг адреса
+                запроса) пока не поддерживается: подставляется только текст,
+                поэтому адрес назван словами. Как переводить текст с разметкой
+                — отдельное решение, а не побочный эффект этой правки.
+            -->
             <section class="block">
                 <h2 class="caption">
-                    Связь с сервером
+                    {{ texts.httpapi.connect_title }}
                     <span class="engine">engine/httpapi</span>
                 </h2>
                 <p class="note">
-                    Самое простое, что умеет приложение: ответить на запрос.
-                    Ответ всегда в общем конверте — данные в result, ошибка
-                    в error, — поэтому клиенту не нужно угадывать форму.
-                    Кнопка повторяет запрос <code>GET /api/health</code>,
-                    чтобы его было видно в сетевой панели инструментов.
+                    {{ texts.httpapi.connect_note }}
                 </p>
                 <div class="probe">
                     <p class="status" w-class="{ 'ok': ok, 'error': !checking && !ok }">
                         <span class="dot"></span>{{ status }}
                     </p>
-                    <button class="button" w-on="click:check" w-disabled="checking">Проверить</button>
+                    <button class="button" w-on="click:check" w-disabled="checking">{{ texts.httpapi.connect_button }}</button>
                 </div>
             </section>
 

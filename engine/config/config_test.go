@@ -231,3 +231,38 @@ func TestTransportSettings(t *testing.T) {
 		}
 	}
 }
+
+// TestLangDefaults — пустой раздел lang означает «включено с умолчаниями»:
+// каталог lang и базовая локаль ru-RU. Без раздела переводов нет вовсе.
+func TestLangDefaults(t *testing.T) {
+	path := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"lang": {},
+		"store": {"path": "data/store.json"}
+	}`)
+
+	c, err := LoadHTTPAPI(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Lang == nil {
+		t.Fatal("раздел lang потерян")
+	}
+	if c.Lang.Dir != DefaultLangDir || c.Lang.Base != DefaultLangBase {
+		t.Fatalf("умолчания: %+v", *c.Lang)
+	}
+
+	none := write(t, `{
+		"server": {"addr": "127.0.0.1:9000"},
+		"interface": {"dir": "interface"},
+		"store": {"path": "data/store.json"}
+	}`)
+	c, err = LoadHTTPAPI(none)
+	if err != nil {
+		t.Fatalf("Load без раздела: %v", err)
+	}
+	if c.Lang != nil {
+		t.Fatalf("переводы включены без раздела: %+v", *c.Lang)
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"go-wex/engine/httpapi"
 	"go-wex/engine/jobs"
 	"go-wex/engine/journal"
+	"go-wex/engine/lang"
 	"go-wex/engine/process"
 	"go-wex/engine/schedule"
 	"go-wex/engine/service"
@@ -200,6 +201,20 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 		return 1
 	}
 
+	// Словари переводов открываются до регистрации: сломанный файл и
+	// отсутствующая базовая локаль должны остановить запуск, а не всплыть
+	// пустой страницей. Путь берётся относительно каталога запуска, как
+	// у хранилища и журнала.
+	var catalog *lang.Catalog
+	if cfg.Lang != nil {
+		catalog, err = lang.Open(cfg.Lang.Dir, cfg.Lang.Base)
+		if err != nil {
+			log.Printf("словари: %v", err)
+			return 1
+		}
+		log.Printf("словари: %s, базовый язык %s", cfg.Lang.Dir, catalog.Base())
+	}
+
 	// Виды работ и очередь общие для модулей: модуль объявляет вид, а ставит
 	// работу через разборщик. Очередь поверх хранилища переживает перезапуск.
 	jobReg := jobs.NewRegistry()
@@ -257,6 +272,12 @@ func runServer(cfg config.HTTPAPI, webDir string) int {
 
 	commands := process.NewRegistry()
 	reg := &registry{api: srv, jobs: jobReg, events: evReg, commands: commands}
+
+	// Маршруты словаря объявляет сам механизм: словари — это движок, а не
+	// модуль, поэтому список модулей на них не влияет.
+	if catalog != nil {
+		catalog.Register(reg)
+	}
 
 	// Состав служб известен только после регистрации модулей, поэтому модулю
 	// передаётся функция: к моменту запроса группа уже собрана.

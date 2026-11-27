@@ -25,12 +25,29 @@ import (
 type HTTPAPI struct {
 	Server    Server    `json:"server"`
 	Interface Interface `json:"interface"`
+	Lang      *Lang     `json:"lang"`
 	Store     Store     `json:"store"`
 	Jobs      Jobs      `json:"jobs"`
 	Services  Services  `json:"services"`
 	Schedule  Schedule  `json:"schedule"`
 	Modules   Modules   `json:"modules"`
 	Journal   *Journal  `json:"journal"`
+}
+
+// Значения по умолчанию для раздела lang: каталог словарей лежит в корне
+// проекта, базовый язык — русский. Пустой раздел означает «включено
+// с умолчаниями»: переводы нужны почти всегда, а путь и язык — нет.
+const (
+	DefaultLangDir  = "lang"
+	DefaultLangBase = "ru-RU"
+)
+
+// Lang — словари переводов: каталог с локалями и базовая локаль, на которую
+// опирается запасной путь. Отсутствие раздела означает, что переводов нет
+// и механизм не подключается: приложению без интерфейса он не нужен.
+type Lang struct {
+	Dir  string `json:"dir"`
+	Base string `json:"base"`
 }
 
 // Server — настройки адреса HTTP-службы. Open — открыть страницу
@@ -136,10 +153,26 @@ func LoadHTTPAPI(path string) (HTTPAPI, error) {
 	if err := dec.Decode(&c); err != nil {
 		return HTTPAPI{}, fmt.Errorf("настройки %s: %w", path, err)
 	}
+	c.applyDefaults()
 	if err := c.validate(); err != nil {
 		return HTTPAPI{}, fmt.Errorf("настройки %s: %w", path, err)
 	}
 	return c, nil
+}
+
+// applyDefaults заполняет необязательные значения раздела lang. Раздел
+// присутствует — значит переводы включены; пустые поля получают умолчания,
+// чтобы файл настроек не повторял путь к каталогу в каждом проекте.
+func (c *HTTPAPI) applyDefaults() {
+	if c.Lang == nil {
+		return
+	}
+	if strings.TrimSpace(c.Lang.Dir) == "" {
+		c.Lang.Dir = DefaultLangDir
+	}
+	if strings.TrimSpace(c.Lang.Base) == "" {
+		c.Lang.Base = DefaultLangBase
+	}
 }
 
 // validate проверяет обязательные значения. Список короткий: адрес сервера,

@@ -9,6 +9,10 @@
   "interface": {
     "dir": "interface"
   },
+  "lang": {
+    "dir": "lang",
+    "base": "ru-RU"
+  },
   "store": {
     "path": "data/store.json"
   },

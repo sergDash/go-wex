@@ -1,15 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://go-wex.local/httpapi-10.schema.json",
+  "$id": "https://go-wex.local/httpapi-11.schema.json",
   "title": "Настройки HTTP-службы",
   "type": "object",
   "additionalProperties": false,
-  "required": ["server", "interface", "store"],
+  "required": [
+    "server",
+    "interface",
+    "store"
+  ],
   "properties": {
     "server": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["addr"],
+      "required": [
+        "addr"
+      ],
       "properties": {
         "addr": {
           "type": "string",
@@ -42,7 +48,9 @@
     "interface": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["dir"],
+      "required": [
+        "dir"
+      ],
       "properties": {
         "dir": {
           "type": "string",
@@ -51,10 +59,29 @@
         }
       }
     },
+    "lang": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "словари переводов: пустой раздел означает умолчания",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "каталог словарей относительно каталога запуска, по умолчанию lang"
+        },
+        "base": {
+          "type": "string",
+          "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+          "description": "базовая локаль для запасного пути, по умолчанию ru-RU"
+        }
+      }
+    },
     "store": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "properties": {
         "path": {
           "type": "string",
@@ -111,7 +138,10 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["after", "class"],
+            "required": [
+              "after",
+              "class"
+            ],
             "properties": {
               "after": {
                 "type": "string",
@@ -120,7 +150,10 @@
               },
               "class": {
                 "type": "string",
-                "enum": ["interactive", "background"],
+                "enum": [
+                  "interactive",
+                  "background"
+                ],
                 "description": "класс работы, который разрешён после порога"
               }
             }
@@ -153,7 +186,11 @@
     "journal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "maxSize", "keep"],
+      "required": [
+        "path",
+        "maxSize",
+        "keep"
+      ],
       "description": "журнал работы; без раздела журнал отключён",
       "properties": {
         "path": {
